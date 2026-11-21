@@ -210,22 +210,43 @@ class NamedModelMultipleChoiceField(forms.ModelMultipleChoiceField):
         return obj.name
 
 
+WEEKDAY_CHOICES = (
+    ("0", "Mon"),
+    ("1", "Tue"),
+    ("2", "Wed"),
+    ("3", "Thu"),
+    ("4", "Fri"),
+    ("5", "Sat"),
+    ("6", "Sun"),
+)
+
+
 class PromotionForm(forms.ModelForm):
-    days_of_week = forms.MultipleChoiceField(
-        choices=(
-            (0, "Monday"), (1, "Tuesday"), (2, "Wednesday"), (3, "Thursday"),
-            (4, "Friday"), (5, "Saturday"), (6, "Sunday"),
-        ),
+    permanent_offer = forms.BooleanField(
         required=False,
+        initial=True,
+        label="Permanent offer",
+        help_text="Keep this promotion available indefinitely without a start or expiration date.",
+    )
+    days_of_week = forms.MultipleChoiceField(
+        choices=WEEKDAY_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
     )
 
     class Meta:
         model = Promotion
         fields = (
-            "name", "section", "active", "starts_at", "ends_at", "start_date", "end_date",
+            "name", "section", "active", "permanent_offer", "start_date", "end_date",
             "start_time", "end_time", "days_of_week", "discount_type", "value", "priority",
             "stackable", "products", "categories", "locations",
         )
+        labels = {
+            "start_date": "Starts on",
+            "end_date": "Ends on",
+            "start_time": "Starts at",
+            "end_time": "Ends at",
+        }
         field_classes = {
             "products": NamedModelMultipleChoiceField,
             "categories": NamedModelMultipleChoiceField,
@@ -242,8 +263,6 @@ class PromotionForm(forms.ModelForm):
             },
         }
         widgets = {
-            "starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}),
             "start_date": forms.DateInput(attrs={"type": "date"}),
             "end_date": forms.DateInput(attrs={"type": "date"}),
             "start_time": forms.TimeInput(attrs={"type": "time"}),
@@ -265,15 +284,43 @@ class PromotionForm(forms.ModelForm):
         self.fields["categories"].queryset = business.categories.order_by("name")
         self.fields["locations"].queryset = business.locations.filter(active=True).order_by("name")
         if not self.is_bound and self.instance.pk:
-            self.initial["days_of_week"] = [str(day) for day in self.instance.days_of_week]
+            self.initial["permanent_offer"] = getattr(self.instance, "permanent_offer", True)
+            self.initial["days_of_week"] = [str(day) for day in (self.instance.days_of_week or [])]
+        elif not self.is_bound:
+            self.initial["permanent_offer"] = True
+            self.initial["days_of_week"] = []
+
+    def clean(self):
+        cleaned_data = super().clean()
+        permanent = cleaned_data.get("permanent_offer", False)
+        if permanent:
+            cleaned_data["start_date"] = None
+            cleaned_data["end_date"] = None
+            cleaned_data["starts_at"] = None
+            cleaned_data["ends_at"] = None
+        else:
+            start_date = cleaned_data.get("start_date")
+            end_date = cleaned_data.get("end_date")
+            if start_date and end_date and end_date < start_date:
+                self.add_error("end_date", "Ends on must be on or after Starts on.")
+        return cleaned_data
 
     def clean_days_of_week(self):
-        return [int(day) for day in self.cleaned_data["days_of_week"]]
+        days = self.cleaned_data.get("days_of_week") or []
+        return sorted([int(day) for day in days])
 
     def save(self, commit=True):
         promotion = super().save(commit=False)
         promotion.business = self.business
-        promotion.days_of_week = self.cleaned_data["days_of_week"]
+        promotion.days_of_week = self.cleaned_data.get("days_of_week") or []
+        if self.cleaned_data.get("permanent_offer"):
+            promotion.permanent_offer = True
+            promotion.start_date = None
+            promotion.end_date = None
+            promotion.starts_at = None
+            promotion.ends_at = None
+        else:
+            promotion.permanent_offer = False
         if commit:
             promotion.save()
             self.save_m2m()

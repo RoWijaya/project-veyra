@@ -30,26 +30,36 @@ class PriceQuote:
 
 
 def _is_in_window(promotion, local_now, utc_now):
-    if promotion.starts_at and utc_now < promotion.starts_at:
-        return False
-    if promotion.ends_at and utc_now >= promotion.ends_at:
-        return False
-    if promotion.start_date and local_now.date() < promotion.start_date:
-        return False
-    if promotion.end_date and local_now.date() > promotion.end_date:
-        return False
+    if not getattr(promotion, "permanent_offer", False):
+        if promotion.starts_at and utc_now < promotion.starts_at:
+            return False
+        if promotion.ends_at and utc_now >= promotion.ends_at:
+            return False
+        if promotion.start_date and local_now.date() < promotion.start_date:
+            return False
+        if promotion.end_date and local_now.date() > promotion.end_date:
+            return False
+
+    allowed_days = (
+        promotion.days_of_week
+        if (promotion.days_of_week and len(promotion.days_of_week) < 7)
+        else list(range(7))
+    )
+
     if not promotion.start_time:
+        if promotion.days_of_week and len(promotion.days_of_week) < 7:
+            return local_now.weekday() in allowed_days
         return True
 
     start, end = promotion.start_time, promotion.end_time
     current = local_now.timetz().replace(tzinfo=None)
     if start < end:
-        return local_now.weekday() in promotion.days_of_week and start <= current < end
+        return local_now.weekday() in allowed_days and start <= current < end
     if current >= start:
-        return local_now.weekday() in promotion.days_of_week
+        return local_now.weekday() in allowed_days
     if current < end:
         previous_day = (local_now.weekday() - 1) % 7
-        return previous_day in promotion.days_of_week
+        return previous_day in allowed_days
     return False
 
 

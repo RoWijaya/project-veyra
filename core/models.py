@@ -665,10 +665,16 @@ class Promotion(models.Model):
             ZoneInfo(self.business.timezone_name)
         except (ZoneInfoNotFoundError, AttributeError):
             errors["business"] = "The business timezone must be a valid IANA timezone."
-        if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
-            errors["ends_at"] = "The end timestamp must be after the start timestamp."
-        if self.start_date and self.end_date and self.end_date < self.start_date:
-            errors["end_date"] = "The end date must be on or after the start date."
+        if self.permanent_offer:
+            self.start_date = None
+            self.end_date = None
+            self.starts_at = None
+            self.ends_at = None
+        else:
+            if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
+                errors["ends_at"] = "The end timestamp must be after the start timestamp."
+            if self.start_date and self.end_date and self.end_date < self.start_date:
+                errors["end_date"] = "The end date must be on or after the start date."
         if bool(self.start_time) != bool(self.end_time):
             errors["end_time"] = "Set both recurring times, or leave both blank."
         if self.start_time and self.end_time and self.start_time == self.end_time:
@@ -691,6 +697,12 @@ class Promotion(models.Model):
                 errors["locations"] = "Locations must belong to this business."
         if errors:
             raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if (self.start_date or self.end_date or self.starts_at or self.ends_at) and not self.pk:
+            if self.permanent_offer and "permanent_offer" not in kwargs.get("update_fields", []):
+                self.permanent_offer = False
+        super().save(*args, **kwargs)
 
 
 class Voucher(models.Model):
