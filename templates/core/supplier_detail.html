@@ -1,0 +1,33 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}{% if supplier %}{{ supplier.name }}{% else %}New supplier{% endif %} · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page"{% if supplier %} data-purchase-stream="{{ business.slug }}"{% endif %}>
+  <div class="crumb"><a href="{% url 'inventory' business.slug %}">Inventory</a><span>/</span><a href="{% url 'suppliers' business.slug %}">Suppliers</a></div>
+  <div class="app-heading"><div><h1>{% if supplier %}{{ supplier.name }}{% else %}New supplier{% endif %}</h1>
+    {% if supplier %}<p>{% if supplier.active %}Active{% else %}Inactive{% endif %} · Updated {{ supplier.updated_at|date:"d M Y" }}</p>{% endif %}</div></div>
+  <div class="report-grid">
+    {% if supplier %}<section class="form-card">
+      <h2>Contact details</h2>
+      {% if supplier.contact_person or supplier.email or supplier.phone or supplier.address %}
+        <dl>{% if supplier.contact_person %}<dt>Contact person</dt><dd>{{ supplier.contact_person }}</dd>{% endif %}
+        {% if supplier.email %}<dt>Email</dt><dd>{{ supplier.email }}</dd>{% endif %}
+        {% if supplier.phone %}<dt>Phone</dt><dd>{{ supplier.phone }}</dd>{% endif %}
+        {% if supplier.address %}<dt>Address</dt><dd>{{ supplier.address }}</dd>{% endif %}</dl>
+      {% else %}<p>No contact details saved.</p>{% endif %}
+      {% if supplier.notes %}<h3>Notes</h3><p>{{ supplier.notes|linebreaksbr }}</p>{% endif %}
+    </section>{% endif %}
+    {% if can_manage %}<section class="form-card">
+      <h2>{% if supplier %}Edit supplier{% else %}Supplier details{% endif %}</h2>
+      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}
+        {% for field in form %}{% include "core/purchasing_field.html" %}{% endfor %}
+        <button class="button button-dark">Save supplier</button>
+      </form>
+    </section>{% endif %}
+  </div>
+  {% if supplier %}<section class="form-card purchase-history"><h2>Purchase history</h2>
+    <p data-purchase-connection class="field-hint" role="status">Connecting to live purchases…</p>
+    <div data-purchase-refresh>{% include "core/purchase_rows.html" %}</div></section>{% endif %}
+</section>
+{% if supplier %}<script src="{% static 'core/purchasing.js' %}" defer></script>{% endif %}
+{% endblock %}

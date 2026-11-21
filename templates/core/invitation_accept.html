@@ -1,0 +1,33 @@
+{% extends "core/auth_shell.html" %}
+{% block title %}Accept invitation — Veyra{% endblock %}
+{% block account_layout %}account-state{% endblock %}
+{% block account_heading %}
+<p class="eyebrow">TEAM INVITATION</p>
+{% if valid and not authenticated %}
+  <h1 id="account-title">Join {{ invitation.business.name }}</h1>
+  <p>Use <strong>{{ invitation.email }}</strong> to sign in or create a Veyra account. Then you can accept this invitation.</p>
+{% elif valid and email_matches %}
+  <h1 id="account-title">Join {{ invitation.business.name }}</h1>
+  <p>This invitation is for <strong>{{ invitation.email }}</strong> and expires {{ invitation.expires_at|date:"M j, Y" }}.</p>
+{% elif valid %}
+  <h1 id="account-title">Use your invited email address</h1>
+  <p>Sign in with the email address this invitation was sent to. Sign out of your current account and reopen the invitation from your email.</p>
+{% else %}
+  <h1 id="account-title">This invitation is unavailable</h1>
+  <p>Ask the business owner to send a new invitation.</p>
+{% endif %}
+{% endblock %}
+{% block account_content %}
+<div class="account-state-actions">
+  {% if valid and not authenticated %}
+    <a class="button button-dark" href="{{ login_url }}">Sign in</a>
+    <a class="account-inline-link" href="{{ register_url }}">Create account</a>
+  {% elif valid and email_matches %}
+    <form method="post">{% csrf_token %}<button class="button button-dark" type="submit">Accept invitation</button></form>
+  {% elif valid %}
+    <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="button button-dark" type="submit">Sign out</button></form>
+  {% else %}
+    <a class="button button-dark" href="{% url 'login' %}">Back to sign in</a>
+  {% endif %}
+</div>
+{% endblock %}

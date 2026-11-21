@@ -1,0 +1,109 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Veyra — Everything in sync{% endblock %}
+{% block extra_head %}<meta name="description" content="Take orders, track stock and run service from one workspace. Veyra is point of sale and business operations for cafés, restaurants, bakeries and shops."><link rel="stylesheet" href="{% static 'core/landing.css' %}">{% endblock %}
+{% block public_header %}
+<header class="landing-header">
+  <a class="wordmark" href="{% url 'home' %}" aria-label="Veyra home"><span class="mark">v.</span>veyra</a>
+  <nav class="landing-nav" aria-label="Main navigation"><a href="#product">Product</a><a href="#operations">Operations</a><a href="#story">Product tour</a></nav>
+  <div class="landing-header-actions">
+    {% if request.user.is_authenticated %}<a class="button button-dark" href="{% url 'workspace_home' %}">Your businesses</a>
+    {% else %}<a href="{% url 'login' %}">Sign in</a><a class="button button-dark landing-desktop-cta" href="{% url 'register' %}">Create an account</a>{% endif %}
+    <details class="landing-menu" data-landing-menu><summary>Menu</summary>
+      <nav aria-label="Mobile navigation"><a href="#product">Product</a><a href="#operations">Operations</a><a href="#story">Product tour</a>{% if not request.user.is_authenticated %}<a href="{% url 'register' %}">Create an account</a>{% endif %}</nav>
+    </details>
+  </div>
+</header>
+{% endblock %}
+{% block motion_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js" defer></script>
+{% endblock %}
+{% block content %}
+<section class="landing-hero landing-shell" data-landing-hero aria-labelledby="landing-title">
+  <div class="landing-hero-heading">
+    <p class="eyebrow">POINT OF SALE &amp; BUSINESS OPERATIONS</p>
+    <h1 id="landing-title">Everything<br><em>in sync.</em></h1>
+  </div>
+  <div class="landing-hero-detail">
+    <p class="landing-lede">Take orders, track stock, and run service from one workspace.</p>
+    <p class="landing-audience">For cafés, restaurants, bakeries, and shops.</p>
+    <div class="landing-actions">
+      {% if request.user.is_authenticated %}<a class="button button-dark" href="{% url 'workspace_home' %}">Open your workspace</a>
+      {% else %}<a class="button button-dark" href="{% url 'register' %}">Create an account</a>{% endif %}
+      <a class="landing-text-link" href="#product">Explore the product <span aria-hidden="true">↓</span></a>
+    </div>
+  </div>
+</section>
+<section id="product" class="landing-showcase landing-shell" aria-label="Veyra point of sale">
+  <figure class="landing-product-figure">
+    <div class="landing-product-stage">
+      {% if landing_poster %}<img class="landing-scene" src="{{ landing_poster }}" alt="" width="1920" height="1080"{% if not request.user.is_authenticated %} fetchpriority="high"{% endif %}>{% endif %}
+      <div class="landing-product-frame">
+        <div class="landing-product-toolbar"><strong>Veyra</strong><span>Orders &amp; POS</span></div>
+        <img src="{% static 'core/landing/veyra-pos-example.png' %}" width="660" height="587" alt="Veyra POS showing an order type, catalog search, category filters, and selected quantities" decoding="async">
+      </div>
+    </div>
+    <figcaption>Veyra point of sale <span>Example workspace</span></figcaption>
+  </figure>
+</section>
+<section id="operations" class="landing-operations landing-shell" aria-labelledby="operations-title">
+  <header class="landing-operations-lead reveal">
+    <p class="eyebrow">ORDERS &amp; SERVICE</p>
+    <h2 id="operations-title">From the table to the pass.</h2>
+    <p>Run dine-in and takeaway through the same catalog. Route each item to the team preparing it.</p>
+    <a class="landing-text-link" href="#story">Take the product tour <span aria-hidden="true">↓</span></a>
+  </header>
+  <dl class="landing-workflow reveal">
+    <div><dt>Take orders</dt><dd>Ring up a sale at the register or share a signed table QR and takeaway menu. Guests see the menu, options, and prices you manage.</dd></div>
+    <div><dt>Prepare and hand off</dt><dd>Send items to kitchen or bar and move an order from preparation to handoff. Guests can follow updates from their own device.</dd></div>
+    <div><dt>Record payment</dt><dd>Record cash or a confirmed card payment and open a receipt from POS or order history.</dd></div>
+  </dl>
+</section>
+<section id="story" class="cinematic-story landing-tour" data-cinematic-story aria-label="How Veyra brings business operations together">
+  <div class="story-stage" data-story-stage>
+    <div class="story-visual" aria-hidden="true">
+      {% if landing_poster %}<img class="story-poster" src="{{ landing_poster }}" alt="" loading="lazy" decoding="async">{% endif %}
+      {% if landing_video_sources %}
+      <video class="story-film" data-story-film muted playsinline preload="metadata" tabindex="-1" aria-hidden="true"{% if landing_poster %} poster="{{ landing_poster }}"{% endif %}>
+        {% for source in landing_video_sources %}<source data-src="{{ source.url }}" type="{{ source.type }}">{% endfor %}
+      </video>
+      {% endif %}
+      <div class="story-veil"></div>
+    </div>
+    <div class="story-chapters">
+      <article class="story-chapter" data-story-chapter>
+        <div><p class="story-kicker">WORKSPACE</p><h2>One account.<br><em>Every business.</em></h2><p>Keep each business’s catalog, locations, permissions, and orders in its own workspace.</p></div>
+        <figure class="tour-product"><img src="{% static 'core/landing/veyra-pos-example.png' %}" width="660" height="587" alt="Veyra point of sale with a sample catalog" loading="lazy" decoding="async"><figcaption>Point of sale · Example workspace</figcaption></figure>
+      </article>
+      <article class="story-chapter" data-story-chapter>
+        <div><p class="story-kicker">PREPARATION</p><h2>Each station<br><em>has its place.</em></h2><p>Pair register, kitchen, and bar devices. Give each station the access it needs to handle its own queue.</p></div>
+        <figure class="tour-product"><img src="{% static 'core/landing/veyra-kitchen-example.png' %}" width="979" height="440" alt="Veyra Kitchen queue with sample orders and preparation actions" loading="lazy" decoding="async"><figcaption>Kitchen · Example orders</figcaption></figure>
+      </article>
+      <article class="story-chapter" data-story-chapter>
+        <div><p class="story-kicker">INVENTORY</p><h2>Know what<br><em>you have.</em></h2><p>Follow stock by location, receive deliveries in parts, and see a history of adjustments and purchases.</p></div>
+        <figure class="tour-product"><img src="{% static 'core/landing/veyra-stock-example.png' %}" width="979" height="330" alt="Veyra inventory list with sample stock balances by location" loading="lazy" decoding="async"><figcaption>Inventory · Example stock</figcaption></figure>
+      </article>
+    </div>
+    <div class="story-progress" aria-hidden="true"><span data-story-progress></span></div>
+    <p class="sr-only" data-film-status role="status" aria-live="polite"></p>
+  </div>
+</section>
+<section class="landing-insights landing-shell" aria-labelledby="insights-title">
+  <div class="reveal"><p class="eyebrow">BUSINESS MANAGEMENT</p><h2 id="insights-title">See what sold.<br>Decide what’s next.</h2></div>
+  <div class="landing-insights-detail reveal">
+    <p>Review paid sales, outstanding balances, and your best sellers. Filter by dates, location, and category.</p>
+    <ul><li>Manage staff access per business</li><li>Set scheduled prices and vouchers</li><li>Track stock movements and receiving history</li></ul>
+  </div>
+</section>
+<section class="landing-close">
+  <div class="landing-shell"><h2>Set up your first business.</h2>{% if request.user.is_authenticated %}<a class="button button-light" href="{% url 'workspace_home' %}">Your businesses</a>{% else %}<a class="button button-light" href="{% url 'register' %}">Create an account</a>{% endif %}</div>
+</section>
+{% endblock %}
+{% block site_footer %}
+<footer class="landing-footer landing-shell">
+  <a class="wordmark" href="{% url 'home' %}" aria-label="Veyra home"><span class="mark">v.</span>veyra</a>
+  <span>Point of sale and business operations</span>
+  <nav aria-label="Footer"><a href="#product">Product</a><a href="#operations">Operations</a>{% if request.user.is_authenticated %}<a href="{% url 'workspace_home' %}">Your businesses</a>{% else %}<a href="{% url 'login' %}">Sign in</a>{% endif %}</nav>
+</footer>
+{% endblock %}

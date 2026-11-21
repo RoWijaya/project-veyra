@@ -1,0 +1,11 @@
+{% extends "core/base.html" %}
+{% block title %}Order history · {{ business.name }}{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'point_of_sale' business.slug %}">Orders &amp; POS</a><span>/</span>History</div>
+  <div class="app-heading"><div><h1>Order history</h1><p>{{ total_count }} order{{ total_count|pluralize }} · Review past transactions and receipts.</p></div><a class="button button-dark" href="{% url 'point_of_sale' business.slug %}">Open POS</a></div>
+  {% if orders %}<div class="table-scroll" role="region" aria-label="Order history table" tabindex="0"><table class="data-table"><caption class="sr-only">Orders newest first</caption><thead><tr><th scope="col">Order</th><th scope="col">Date</th><th scope="col">Location</th><th scope="col">Service</th><th scope="col">Order status</th><th scope="col">Payment</th><th scope="col" class="numeric">Total</th><th scope="col">Receipt</th></tr></thead><tbody>
+  {% for order in orders %}<tr><td>{{ order.pk|stringformat:"s"|slice:":8" }}</td><td>{{ order.created_at|date:'d M Y H:i' }}</td><td>{{ order.location.name|default:'Unassigned' }}</td><td>{{ order.get_order_type_display }}{% if order.table_label %} · {{ order.table_label }}{% endif %}</td><td>{{ order.get_status_display }}</td><td>{{ order.get_payment_status_display }} · {{ order.get_payment_method_display }}</td><td class="numeric">Rp {{ order.total|floatformat:"-2g" }}{% if order.voucher_snapshot %}<br><small>Voucher · {{ order.voucher_snapshot.code }} (−Rp {{ order.voucher_discount|floatformat:"-2" }})</small>{% endif %}</td><td>{% if order.payment_status == 'paid' %}<a href="{% url 'order_receipt' business.slug order.pk %}">Preview / Print receipt<span class="sr-only"> order {{ order.pk|stringformat:"s"|slice:":8" }}</span></a>{% else %}Available after payment{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>{% include "core/pagination.html" %}{% else %}<div class="inline-empty">Your orders will appear here after the first transaction.</div>{% endif %}
+</section>
+{% endblock %}

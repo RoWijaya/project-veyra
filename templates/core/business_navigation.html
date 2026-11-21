@@ -1,0 +1,22 @@
+<aside class="app-sidebar" data-business-navigation>
+  <div class="workspace-header">
+    <a class="workspace-brand" href="{% url 'business_dashboard' nav.business.slug %}">Veyra</a>
+    <details class="workspace-account" data-workspace-account>
+      <summary>Account <span class="ui-chevron" aria-hidden="true"></span></summary>
+      <div class="workspace-account-panel">
+        <p>{{ request.user.email }}</p>
+        <a href="{% url 'workspace_home' %}" tabindex="0">Switch business</a>
+        <a href="{% url 'account_security' %}" tabindex="0">Account security</a>
+        <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="text-button">Sign out</button></form>
+      </div>
+    </details>
+    <p class="sidebar-business"><strong>{{ nav.business.name }}</strong>{% if selected_location %}<span>{{ selected_location.name }}</span>{% elif station.location %}<span>{{ station.location.name }}</span>{% endif %}{% if nav.context_label %}<span>{{ nav.context_label }}</span>{% endif %}</p>
+  </div>
+  <div class="nav-group sidebar-settings">
+    <a href="{% url 'business_settings' nav.business.slug %}"{% if nav.settings_current %} aria-current="page"{% elif nav.settings_open %} aria-current="location"{% endif %}>Settings <span aria-hidden="true">›</span></a>
+  </div>
+  <details open class="workspace-menu" data-business-menu>
+    <summary>Business menu <span class="ui-chevron" aria-hidden="true"></span></summary>
+    <nav aria-label="Business navigation">{% for group in nav.groups %}<div class="nav-group"><p>{{ group.title }}</p>{% for link in group.links %}<a href="{{ link.url }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}</div>{% endfor %}</nav>
+  </details>
+</aside>

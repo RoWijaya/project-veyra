@@ -1,0 +1,15 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'core/account.css' %}">{% endblock %}
+{% block public_header %}{% include "core/account_header.html" %}{% endblock %}
+{% block content %}
+<div class="account-layout {% block account_layout %}{% endblock %}">
+  <header class="account-lead">
+    {% block account_heading %}{% endblock %}
+  </header>
+  <section class="account-form-area" aria-labelledby="account-title">
+    {% block account_content %}{% endblock %}
+  </section>
+</div>
+{% endblock %}
+{% block site_footer %}{% include "core/account_footer.html" %}{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% block title %}Product image · {{ product.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'catalog' business.slug %}">Product catalog</a><span>/</span>{{ product.name }}</div>
+  <div class="app-heading"><div><h1>Product image</h1><p>{{ product.name }}</p></div></div>
+  <section class="form-card">
+    {% if image %}<img class="media-preview" data-media-image src="{% url 'product_image' business.slug product.pk %}" alt="{{ image.alt_text }}" width="480" height="320">{% else %}<p>No image yet. Your product can still be ordered.</p>{% endif %}
+    <p>JPEG, PNG or WebP, up to 5 MB and 16 million pixels. Images are resized to fit 1024 pixels.</p>
+    <form method="post" enctype="multipart/form-data" action="{% url 'product_image' business.slug product.pk %}" class="form-stack" data-media-form>
+      {% csrf_token %}<input type="hidden" name="return_to_catalog" value="1">
+      {{ form.non_field_errors }}
+      {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+      <img class="media-preview" data-upload-preview alt="Selected image preview" width="480" height="320" hidden>
+      <div class="management-actions"><button class="button button-dark">Save image</button><a class="button button-light" href="{% url 'catalog' business.slug %}">Back to catalog</a></div>
+    </form>
+    {% if image %}<form method="post" action="{% url 'product_image' business.slug product.pk %}" data-confirm="Remove the image for {{ product.name }}?">
+      {% csrf_token %}<input type="hidden" name="return_to_catalog" value="1"><button name="action" value="remove" class="button button-light">Remove image</button>
+    </form>{% endif %}
+  </section>
+</section>
+{% endblock %}

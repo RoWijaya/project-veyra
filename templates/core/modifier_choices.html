@@ -1,0 +1,16 @@
+{% load l10n %}
+<div class="modifier-choices" data-modifier-choices>
+  {% for group in groups %}
+  <fieldset class="modifier-choice-group" data-modifier-group="{{ group.pk }}" data-min="{{ group.min_selections }}" data-max="{{ group.max_selections }}"{% if location_scoped %} data-modifier-locations="{% for branch in group.locations.all %}{{ branch.pk|unlocalize }}{% if not forloop.last %} {% endif %}{% endfor %}"{% endif %}>
+    <legend>{{ group.name }}</legend>
+    <p class="field-hint">{% if group.min_selections == group.max_selections %}Choose {{ group.max_selections }}{% elif group.min_selections %}Choose {{ group.min_selections }}–{{ group.max_selections }}{% else %}Optional · Choose up to {{ group.max_selections }}{% endif %}{% if location_scoped and group.location_ids %} · {% for branch in group.locations.all %}{{ branch.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</p>
+    {% if not group.min_selections and group.max_selections == 1 %}
+    <label><input type="radio" name="{{ option_name }}_{{ group.pk|unlocalize }}" value="" data-modifier-option data-surcharge="0"{% if not selected %} checked{% endif %}> <span>No selection</span></label>
+    {% endif %}
+    {% for option in group.active_options %}
+    <label><input type="{% if group.max_selections == 1 %}radio{% else %}checkbox{% endif %}" name="{{ option_name }}_{{ group.pk|unlocalize }}" value="{{ option.pk|unlocalize }}" data-modifier-option data-surcharge="{{ option.surcharge|unlocalize }}"{% if option.pk|stringformat:"s" in selected %} checked{% endif %}{% if not location_scoped and group.min_selections == 1 and group.max_selections == 1 %} required{% endif %}> <span>{{ option.name }}</span>{% if option.surcharge %}<span class="modifier-surcharge">+Rp {{ option.surcharge|floatformat:"-2" }}</span>{% endif %}</label>
+    {% empty %}<p class="field-hint">Options for this group are unavailable.</p>{% endfor %}
+  </fieldset>
+  {% endfor %}
+  <p class="field-hint" data-modifier-error role="status" hidden></p>
+</div>

@@ -1,0 +1,41 @@
+{% load static navigation %}
+{% business_navigation as nav %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f1e8">
+  <title>{% block title %}Veyra — Everything in sync{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'core/veyra-mark.svg' %}">
+  <link rel="stylesheet" href="{% static 'core/site.css' %}">
+  <link rel="stylesheet" href="{% static 'core/app-ui.css' %}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body{% if nav %} class="business-shell"{% endif %}>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  {% if not nav %}{% block public_header %}<header class="topbar">
+    <a class="wordmark" href="{% url 'home' %}" aria-label="Veyra home"><span class="mark">v.</span>veyra</a>
+    <nav class="topnav" aria-label="Main navigation">
+      {% if request.user.is_authenticated %}
+        <a href="{% url 'workspace_home' %}">Your businesses</a>
+        <a href="{% url 'account_security' %}">Account security</a>
+        <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button">Sign out</button></form>
+      {% else %}
+        {% if request.resolver_match.url_name == "home" %}<a class="marketing-nav-link" href="#product">Product</a>{% endif %}
+        <a href="{% url 'login' %}"{% if request.resolver_match.url_name == 'login' %} aria-current="page"{% endif %}>Sign in</a>
+        <a class="button button-dark button-small" href="{% url 'register' %}"{% if request.resolver_match.url_name == 'register' %} aria-current="page"{% endif %}>Get started</a>
+      {% endif %}
+    </nav>
+  </header>{% endblock %}{% endif %}
+  <div class="app-frame">{% if nav %}{% include "core/business_navigation.html" %}{% endif %}
+  <main id="main-content" tabindex="-1">{% if messages %}<div class="flash-messages" aria-live="polite">{% for message in messages %}<p class="{% if message.tags == 'error' %}form-error{% else %}success-message{% endif %}">{{ message }}</p>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
+  </div>
+  {% block site_footer %}<footer class="footer"><a href="{% url 'home' %}">Veyra</a><span>Point of sale and business operations</span>{% if request.resolver_match.url_name == 'home' %}<nav aria-label="Footer"><a href="#product">Product</a><a href="{% url 'login' %}">Sign in</a></nav>{% endif %}</footer>{% endblock %}
+  {% block motion_scripts %}{% endblock %}
+  <script src="{% static 'core/site.js' %}" defer></script>
+  <script src="{% static 'core/app-ui.js' %}" defer></script>
+  <script src="{% static 'core/modifier-ui.js' %}" defer></script>
+  <script src="{% static 'core/ordering-ui.js' %}" defer></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+{% block title %}Locations · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Locations</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / LOCATIONS</p><h1>Locations</h1></div></div>
+  <div class="catalog-layout">
+    <section><div class="section-heading"><div><p class="eyebrow">YOUR BUSINESS</p><h2>{{ locations.count }} locations</h2></div></div>
+      <div class="list-toolbar"><label class="field"><span>Search locations</span><input type="search" data-list-filter data-filter-target="locations-list" placeholder="Name or address" autocomplete="off"></label><p data-filter-status="locations-list" role="status" aria-live="polite"></p></div><div class="product-list" id="locations-list">{% for location in locations %}<article class="product-row" data-filter-row><span class="product-icon" aria-hidden="true">L</span><div><strong>{{ location.name }}</strong><small>{{ location.address|default:"Address not added" }}</small></div><b>{% if location.active %}ACTIVE{% else %}PAUSED{% endif %}</b>
+      {% if location.active %}<details class="pickup-settings">
+        <summary>Takeaway <span class="field-hint">· {% if location.pickup_url %}Enabled{% else %}Off{% endif %}</span></summary>
+        {% if location.pickup_url %}
+        <label class="field"><span>Shareable takeaway link for {{ location.name }}</span><input type="url" value="{{ location.pickup_url }}" readonly></label>
+        <a class="button button-light" href="{{ location.pickup_path }}">Open takeaway menu</a>
+        {% else %}<p class="field-hint">Enable takeaway to share a menu that customers can use without scanning a table QR code.</p>{% endif %}
+        {% if can_manage %}<form method="post"{% if location.pickup_url %} data-confirm="Disable takeaway here? The public link will stop accepting orders."{% endif %}>{% csrf_token %}
+          <input type="hidden" name="location" value="{{ location.pk }}">
+          <button type="submit" class="button button-light" name="action" value="{% if location.pickup_url %}disable_pickup{% else %}enable_pickup{% endif %}">{% if location.pickup_url %}Disable{% else %}Enable{% endif %} takeaway</button>
+        </form>{% endif %}
+      </details>{% endif %}
+    </article>{% empty %}<div class="inline-empty">Add a location to start organizing operations by place.</div>{% endfor %}</div>
+    </section>
+    {% if can_manage %}<aside class="form-card"><p class="eyebrow">GROW YOUR FOOTPRINT</p><h2>Add a location</h2>
+      
+      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endfor %}<button class="button button-dark form-submit">Save location <span aria-hidden="true">↗</span></button></form>
+    </aside>{% endif %}
+  </div>
+</section>
+{% endblock %}

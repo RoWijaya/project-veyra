@@ -1,0 +1,13 @@
+<header class="account-header">
+  <a class="wordmark" href="{% url 'home' %}" aria-label="Veyra home"><span class="mark">v.</span>veyra</a>
+  {% if request.resolver_match.url_name == "login" %}
+    <a class="account-header-link" href="{% url 'register' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Create an account</a>
+  {% elif request.resolver_match.url_name == "register" %}
+    <a class="account-header-link" href="{% url 'login' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Sign in</a>
+  {% elif request.user.is_authenticated and request.resolver_match.url_name == "account_security" or request.user.is_authenticated and request.resolver_match.url_name == "create_business" %}
+    <nav class="account-header-actions" aria-label="Account navigation">
+      <a class="account-header-link" href="{% url 'workspace_home' %}">Your businesses</a>
+      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button account-header-link" type="submit">Sign out</button></form>
+    </nav>
+  {% else %}<span class="account-header-context">Veyra account</span>{% endif %}
+</header>

@@ -1,0 +1,58 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Receipt {{ receipt.order_number }} · {{ business.name }}{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{% static 'core/receipt.css' %}">
+{% if width == '58' %}<link rel="stylesheet" href="{% static 'core/receipt-58.css' %}">{% endif %}
+<section class="app-page receipt-page" data-receipt-stream="{{ business.slug }}" data-receipt-order="{{ order.pk }}">
+  <div class="receipt-controls">
+    <div class="crumb"><a href="{% url 'point_of_sale' business.slug %}">Orders &amp; POS</a><span>/</span>Receipt</div>
+    <div class="app-heading"><div><h1>Receipt preview</h1><p>Order {{ receipt.order_number }} · {{ receipt.payment_status }}</p></div></div>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  </div>
+  <div class="receipt-layout">
+    <article class="receipt-paper" aria-label="Receipt preview">
+      <h2>{{ receipt.business_name }}</h2>
+      {% if receipt.location %}<p>{{ receipt.location }}</p>{% endif %}
+      <p>{{ receipt.created_at }}</p>
+      <hr>
+      <dl><div><dt>Order</dt><dd>{{ receipt.order_number }}</dd></div><div><dt>Service</dt><dd>{{ receipt.order_type }}</dd></div>
+      {% if receipt.table_label %}<div><dt>Table</dt><dd>{{ receipt.table_label }}</dd></div>{% endif %}
+      {% if receipt.cashier %}<div><dt>Cashier</dt><dd>{{ receipt.cashier }}</dd></div>{% endif %}</dl>
+      <hr>
+      <ul class="receipt-items">{% for item in receipt.items %}<li><strong>{{ item.name }}</strong><div><span>{{ item.quantity }} × Rp {{ item.unit_price|floatformat:"-2" }}</span><span>Rp {{ item.line_total|floatformat:"-2" }}</span></div>
+      {% for option in item.modifiers %}<small>{{ option.group }} · {{ option.name }}{% if option.surcharge != '0.00' %} (+Rp {{ option.surcharge|floatformat:"-2" }} each){% endif %}</small>{% endfor %}
+        {% for promotion in item.promotions %}<small>{{ promotion.name }} · −Rp {{ promotion.discount|floatformat:"-2" }}</small>{% endfor %}</li>{% endfor %}</ul>
+      <hr>
+      <dl><div><dt>Subtotal</dt><dd>Rp {{ receipt.subtotal|floatformat:"-2" }}</dd></div>
+      {% if receipt.promotion_discount != '0.00' %}<div><dt>{% if receipt.voucher %}Promotions{% else %}Discount{% endif %}</dt><dd>−Rp {{ receipt.promotion_discount|floatformat:"-2" }}</dd></div>{% endif %}
+      {% if receipt.voucher %}<div><dt>Voucher · {{ receipt.voucher.code }}</dt><dd>−Rp {{ receipt.voucher.discount|floatformat:"-2" }}</dd></div>{% endif %}
+      <div class="receipt-total"><dt>Total</dt><dd>Rp {{ receipt.total|floatformat:"-2" }}</dd></div>
+      <div><dt>Payment</dt><dd>{{ receipt.payment_method }}</dd></div>
+      <div><dt>Paid</dt><dd>Rp {{ receipt.amount_paid|floatformat:"-2" }}</dd></div>
+      {% if receipt.cash_received %}<div><dt>Cash received</dt><dd>Rp {{ receipt.cash_received|floatformat:"-2" }}</dd></div><div><dt>Change due</dt><dd>Rp {{ receipt.change_due|floatformat:"-2" }}</dd></div>{% endif %}</dl>
+      <hr><p class="receipt-reference">Receipt {{ receipt.receipt_number }}</p>
+    </article>
+    <aside class="receipt-controls receipt-print-options">
+      <h2>Printing</h2>
+      <form method="get" class="receipt-width-form"><label class="field"><span>Paper width</span><select name="width"><option value="80"{% if width == '80' %} selected{% endif %}>80 mm</option><option value="58"{% if width == '58' %} selected{% endif %}>58 mm</option></select></label><button class="button button-light">Update preview</button></form>
+      {% if can_print %}<button type="button" class="button button-dark" data-print-receipt>Print with browser</button>
+      <p class="field-hint">Choose the matching paper size in the print dialog. Turn off browser headers and footers.</p>{% endif %}
+      <p class="field-hint" data-receipt-connection role="status">Connecting to print updates…</p>
+      <div id="receipt-print-state">
+        {% if can_print and stations %}
+        <form method="post" class="receipt-dispatch">{% csrf_token %}
+          <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+          <input type="hidden" name="action" value="{{ action }}">
+          <label class="field"><span>Receipt printer</span><select name="station" required>{% for station in stations %}<option value="{{ station.pk }}">{{ station.printer.name }} · {{ station.name }} · {{ station.printer.paper_width }}</option>{% endfor %}</select></label>
+          <button class="button button-dark"{% if not can_queue %} disabled{% endif %}>{% if action == 'reprint' %}Reprint receipt{% elif action == 'retry' %}Retry printing{% else %}Print receipt{% endif %}</button>
+        </form>
+        {% elif can_print %}<p class="inline-empty">Use browser printing, or connect a printer to a station at this order's location.{% if business.owner_id == request.user.pk %} <a href="{% url 'stations' business.slug %}">Manage stations</a>{% endif %}</p>{% endif %}
+        <h3>Print history</h3>
+        {% if history %}<ol class="receipt-history">{% for job in history %}<li><strong>{{ job.printer }}</strong><span>{% if job.status == 'pending' %}Queued{% elif job.status == 'printing' %}Accepted by printer service{% elif job.status == 'printed' %}Printer acknowledged{% elif job.status == 'failed' %}Failed{% else %}Cancelled{% endif %}</span><small>{{ job.created_at }}{% if job.error %} · {{ job.error }}{% endif %}</small></li>{% endfor %}</ol>{% else %}<p class="field-hint">No printer jobs requested. Browser printing opens your device's print dialog.</p>{% endif %}
+      </div>
+    </aside>
+  </div>
+</section>
+<script src="{% static 'core/receipt.js' %}" defer></script>
+{% endblock %}

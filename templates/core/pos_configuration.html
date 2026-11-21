@@ -1,0 +1,11 @@
+<div class="pos-configuration" data-pos-config data-config-index="{{ configuration.index }}">
+  {% include "core/quantity_input.html" with minimum=0 input_name=configuration.input_name initial_quantity=configuration.quantity %}
+  {% if product.order_modifier_groups %}
+  <details class="pos-options" data-pos-options{% if configuration.selected %} open{% endif %}>
+    <summary>Options</summary>
+    {% include "core/modifier_choices.html" with groups=product.order_modifier_groups selected=configuration.selected option_name=configuration.option_name location_scoped=True %}
+  </details>
+  {% endif %}
+  <button class="text-button" type="button" data-reset-config hidden>Reset options</button>
+  <button class="text-button" type="button" data-remove-config{% if configuration.index == "0" %} hidden{% endif %}>Remove configuration</button>
+</div>

@@ -1,0 +1,8 @@
+{% extends "core/base.html" %}
+{% block title %}Your businesses — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="app-heading"><div><p class="eyebrow">YOUR VEYRA / WORKSPACES</p><h1>Good to have you,<br><em>{{ request.user.first_name|default:request.user.email }}.</em></h1></div><a class="button button-dark" href="{% url 'create_business' %}">Create a business <span>+</span></a></div>
+  {% if businesses %}<div class="business-grid">{% for business in businesses %}<a class="business-card" href="{% url 'business_dashboard' business.slug %}"><span class="business-symbol">v.</span><span class="eyebrow">{% if business.owner_id == request.user.id %}OWNER{% else %}MANAGEMENT ACCESS{% endif %}</span><h2>{{ business.name }}</h2><span class="business-meta">{{ business.product_count }} products · {{ business.order_count }} orders</span><span class="card-arrow">↗</span></a>{% endfor %}</div>{% else %}<div class="empty-state"><span class="empty-mark">v.</span><p class="eyebrow">A FRESH START</p><h2>Your first business<br>starts here.</h2><p>Create a business workspace to bring your operations together.</p><a class="button button-dark" href="{% url 'create_business' %}">Create your business <span>↗</span></a></div>{% endif %}
+</section>
+{% endblock %}

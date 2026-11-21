@@ -1,0 +1,50 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}{{ purchase.reference }} · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page" data-purchase-stream="{{ business.slug }}" data-purchase-id="{{ purchase.pk }}">
+  <div class="crumb"><a href="{% url 'purchases' business.slug %}">Purchase orders</a><span>/</span>{{ purchase.reference }}</div>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <p data-purchase-connection class="field-hint" role="status">Connecting to live purchases…</p>
+  <div class="form-stack" data-purchase-refresh>
+  <div class="app-heading"><div><h1>{{ purchase.reference }}</h1><p>{{ purchase.supplier_name }} · {{ purchase.location_name }}</p></div></div>
+    <section class="form-card">
+      <div class="section-heading"><div><h2 data-purchase-status>{{ purchase.get_status_display }}</h2><p>Created {{ purchase.created_at|date:"d M Y" }}{% if purchase.ordered_at %} · Ordered {{ purchase.ordered_at|date:"d M Y" }}{% endif %}{% if purchase.expected_on %} · Expected {{ purchase.expected_on|date:"d M Y" }}{% endif %}</p></div>
+        {% if can_manage %}
+          {% if purchase.status == 'draft' %}<a class="button button-light" href="{% url 'purchase_edit' business.slug purchase.pk %}">Edit draft</a>
+          {% elif purchase.status == 'ordered' or purchase.status == 'partial' %}{% if purchase.location.active %}<a class="button button-dark" href="{% url 'purchase_receiving' business.slug purchase.pk %}">Receive delivery</a>{% endif %}{% endif %}
+        {% endif %}
+      </div>
+      <div class="report-table" tabindex="0" role="region" aria-label="Ordered items and outstanding quantities">
+        <table><thead><tr><th scope="col">Item</th><th scope="col">Ordered</th><th scope="col">Received</th><th scope="col">Outstanding</th><th scope="col">Unit cost</th><th scope="col">Subtotal</th></tr></thead><tbody>
+        {% for line in purchase.lines.all %}<tr><th scope="row">{{ line.item_name }}</th><td>{{ line.ordered_quantity|floatformat:"-3" }} {{ line.unit }}</td>
+          <td>{{ line.received_quantity|floatformat:"-3" }} {{ line.unit }}</td><td><strong>{{ line.outstanding_quantity|floatformat:"-3" }} {{ line.unit }}</strong></td>
+          <td>{{ line.unit_cost|floatformat:"2g" }}</td><td>{{ line.subtotal|floatformat:"2g" }}</td></tr>{% endfor %}
+        </tbody></table>
+      </div>
+      <p><strong>Order total · Rp {{ purchase.total|floatformat:"2g" }}</strong></p>
+      {% if can_manage and purchase.status == 'draft' %}<form method="post" class="management-actions">{% csrf_token %}<input type="hidden" name="revision" value="{{ purchase.revision }}"><button class="button button-dark" name="action" value="submit">Mark as ordered</button></form>{% endif %}
+    </section>
+    <section class="form-card">
+      <h2>Receiving history</h2>
+      {% for receipt in page_obj %}<details class="form-disclosure">
+        <summary>{{ receipt.reference }} · {{ receipt.created_at|date:"d M Y H:i" }}{% if receipt.delivery_reference %} · {{ receipt.delivery_reference }}{% endif %}</summary>
+        <p>Received by {{ receipt.actor.get_full_name|default:receipt.actor.email }}</p>
+        {% if receipt.notes %}<p>{{ receipt.notes|linebreaksbr }}</p>{% endif %}
+        <div class="report-table" tabindex="0" role="region" aria-label="Items in {{ receipt.reference }}">
+          <table><thead><tr><th scope="col">Item</th><th scope="col">Accepted</th><th scope="col">Rejected</th><th scope="col">Damaged</th><th scope="col">Unit cost</th><th scope="col">Accepted subtotal</th></tr></thead><tbody>
+          {% for line in receipt.lines.all %}<tr><th scope="row">{{ line.purchase_line.item_name }} · {{ line.purchase_line.unit }}</th>
+            <td>{{ line.accepted_quantity|floatformat:"-3" }}</td><td>{{ line.rejected_quantity|floatformat:"-3" }}</td><td>{{ line.damaged_quantity|floatformat:"-3" }}</td>
+            <td>{{ line.unit_cost|floatformat:"2g" }}</td><td>{{ line.subtotal|floatformat:"2g" }}</td></tr>{% endfor %}
+          </tbody></table>
+        </div>
+      </details>{% empty %}<p>No deliveries recorded.</p>{% endfor %}{% include "core/pagination.html" %}
+    </section>
+    {% if can_manage and purchase.status != 'received' and purchase.status != 'cancelled' %}
+    <form method="post" data-confirm="Cancel this purchase? Previously accepted stock and delivery history will be kept.">{% csrf_token %}<input type="hidden" name="revision" value="{{ purchase.revision }}">
+      <button class="button button-light button-danger" name="action" value="cancel">Cancel purchase</button>
+    </form>{% endif %}
+  </div>
+</section>
+<script src="{% static 'core/purchasing.js' %}" defer></script>
+{% endblock %}

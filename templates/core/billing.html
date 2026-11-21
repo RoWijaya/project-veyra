@@ -1,0 +1,62 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Subscription &amp; billing · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page" data-billing-stream="{{ business.slug }}">
+  <div class="crumb"><a href="{% url 'business_settings' business.slug %}">Settings</a><span>/</span>Subscription &amp; billing</div>
+  <div class="app-heading"><div><h1>Subscription &amp; billing</h1><p>Manage the Veyra plan for {{ business.name }}.</p></div></div>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <p data-billing-connection class="sr-only" role="status"></p>
+  <div class="form-stack billing-layout" data-billing-state>
+  {% if subscription %}
+  <section class="form-card">
+    <div class="billing-heading"><div><h2>{% if term %}{{ term.name }}{% else %}{{ subscription.plan.name }}{% endif %}</h2><span class="status-badge">{{ label }}</span></div>
+      {% if term.interval == 'month' %}<p><strong>Rp {{ term.monthly_price|floatformat:"0g" }}</strong> per month</p>{% endif %}</div>
+    <dl class="plan-facts">
+      {% if subscription.trial_ends_at %}<div><dt>Trial deadline</dt><dd>{{ subscription.trial_ends_at|date:"d M Y H:i T" }}</dd></div>{% endif %}
+      {% if subscription.current_period_start %}<div><dt>Paid period</dt><dd>{{ subscription.current_period_start|date:"d M Y" }} – {{ subscription.current_period_end|date:"d M Y" }}</dd></div>{% endif %}
+      {% if can_schedule and not subscription.cancel_at_period_end %}<div><dt>Next billing date</dt><dd>{{ subscription.current_period_end|date:"d M Y" }}</dd></div>{% endif %}
+    </dl>
+    {% if restricted %}<p>Contact platform support to restore billing actions. You can still review plans and invoices.</p>{% endif %}
+    {% if grace_until %}<p class="form-error">Payment is due. Operational access continues through {{ grace_until|date:"d M Y H:i T" }}.</p>{% endif %}
+    {% if label == 'Expired' or label == 'Canceled' %}<p>Choose a plan or pay an eligible invoice to restore covered operations. Your historical records remain available.</p>{% endif %}
+    {% if subscription.cancel_at_period_end and can_schedule %}<p>Access ends on {{ subscription.current_period_end|date:"d M Y H:i T" }}.</p>{% endif %}
+    {% if subscription.pending_plan %}<p>Next plan · <strong>{{ subscription.pending_plan.name }}</strong> from {{ subscription.current_period_end|date:"d M Y" }} after payment.</p>{% endif %}
+    {% if can_schedule %}<form method="post" {% if not subscription.cancel_at_period_end %}data-confirm="End renewal after the current paid period? Your data will remain available."{% endif %}>{% csrf_token %}
+      {% if subscription.cancel_at_period_end %}<button class="button button-light" name="action" value="resume">Resume renewal</button>
+      {% else %}<button class="button button-light button-danger" name="action" value="cancel">Cancel at period end</button>{% endif %}
+    </form>{% endif %}
+  </section>
+  <section class="form-card">
+    <h2>Usage</h2><dl class="billing-usage">{% for name, used, limit in usage %}<div><dt>{{ name }}</dt><dd>{{ used }}{% if limit is not None %} of {{ limit }}{% else %} used{% endif %}</dd></div>{% endfor %}</dl>
+  </section>
+  <section class="form-card">
+  {% if confirm_plan %}
+    <h2>Confirm {{ confirm_plan.name }}</h2><p>Rp {{ confirm_plan.monthly_price|floatformat:"0g" }} per month.</p>
+    {% if can_schedule %}<p>The choice takes effect after payment for the next period, starting {{ subscription.current_period_end|date:"d M Y" }}.</p>
+    {% else %}<p>Checkout opens an invoice. Plan access starts when payment is confirmed.</p>{% endif %}
+    <form method="post" class="management-actions">{% csrf_token %}<input type="hidden" name="plan" value="{{ confirm_plan.code }}"><button class="button button-dark" name="action" value="select">{% if can_schedule %}Confirm plan choice{% else %}Create invoice{% endif %}</button><a href="{% url 'subscription_billing' business.slug %}#plans" class="button button-light">Compare plans</a></form>
+  {% else %}
+    <h2 id="plans">Compare plans</h2><p>Plan changes take effect at renewal. New subscriptions and reactivation require a paid invoice.</p>
+    {% if plans %}<div class="billing-plans">{% for item in plans %}<article>
+      <h3>{{ item.plan.name }}</h3><p><strong>Rp {{ item.plan.monthly_price|floatformat:"0g" }}</strong> per month</p>
+      {% if item.plan.description %}<p>{{ item.plan.description }}</p>{% endif %}
+      {% if item.features %}<ul>{% for feature in item.features %}<li>{{ feature }}</li>{% endfor %}</ul>{% endif %}
+      {% if item.limits %}<dl>{% for label, limit in item.limits.items %}<div><dt>{{ label|capfirst }}</dt><dd>{{ limit }}</dd></div>{% endfor %}</dl>{% endif %}
+      {% if subscription.plan_id == item.plan.pk and can_schedule and not subscription.pending_plan %}<span class="status-badge">Current plan</span>{% else %}
+      {% if not restricted %}<a class="button button-light" href="?plan={{ item.plan.code|urlencode }}">Review {{ item.plan.name }}</a>{% endif %}{% endif %}
+    </article>{% endfor %}</div>{% else %}<p>No paid plans have been published.</p>{% endif %}
+  {% endif %}
+  </section>
+  <section class="form-card">
+    <h2>Invoices and payments</h2>
+    {% if invoices %}<div class="report-table" tabindex="0" role="region" aria-label="Invoices">
+      <table><thead><tr><th scope="col">Invoice</th><th scope="col">Issued</th><th scope="col">Plan</th><th scope="col">Total</th><th scope="col">Status</th></tr></thead><tbody>
+      {% for invoice in invoices %}<tr><td><a href="{% url 'billing_invoice' business.slug invoice.pk %}">{{ invoice.reference }}</a></td><td>{{ invoice.issued_at|date:"d M Y" }}</td><td>{{ invoice.terms.name }}</td><td>Rp {{ invoice.total|floatformat:"0g" }}</td><td>{{ invoice.get_status_display }}</td></tr>{% endfor %}
+      </tbody></table></div>{% include "core/pagination.html" with page_obj=invoices %}{% else %}<p>No invoices yet.</p>{% endif %}
+  </section>
+  {% else %}<p class="inline-empty">There is no subscription record for this business. Contact platform support.</p>{% endif %}
+  </div>
+</section>
+<script src="{% static 'core/billing.js' %}" defer></script>
+{% endblock %}

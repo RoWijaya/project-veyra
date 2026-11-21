@@ -1,0 +1,39 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Promotions · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Promotions</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / MENU PRICING</p><h1>Promotions & pricing</h1><p>Schedule offers once. Prices return to normal when the offer ends.</p></div>{% if can_manage %}<a class="button button-light" href="{% url 'vouchers' business.slug %}">Vouchers</a>{% endif %}</div>
+  <p><a class="button button-light" href="{% url 'banners' business.slug %}">Menu banners</a></p>
+  <div class="promotion-layout">
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">SCHEDULED PRICING</p><h2>{{ promotions.count }} promotions</h2></div></div>
+      {% if promotions %}<div class="list-toolbar"><label class="field"><span>Search promotions</span><input type="search" data-list-filter data-filter-target="promotions-list" placeholder="Name or offer type"></label><p data-filter-status="promotions-list" role="status" aria-live="polite"></p></div>{% endif %}
+      <div class="product-list" id="promotions-list">{% for promotion in promotions %}
+        <article class="product-row promotion-row" data-filter-row>
+          <span class="product-icon" aria-hidden="true">P</span>
+          <div><strong>{{ promotion.name }}</strong><small>{{ promotion.get_discount_type_display }}: {{ promotion.value }}{% if promotion.section %} · {{ promotion.section }}{% endif %}{% if promotion.start_time %} · {{ promotion.start_time|time:"H:i" }}–{{ promotion.end_time|time:"H:i" }}{% endif %}</small><small>Priority {{ promotion.priority }} · {% if promotion.stackable %}May combine with other offers{% else %}Does not combine{% endif %}</small></div>
+          <div class="management-actions"><span class="status-badge">{% if promotion.active %}Enabled{% else %}Paused{% endif %}</span>{% if can_manage %}<a class="button button-light button-small" href="{% url 'promotion_edit' business.slug promotion.pk %}" aria-label="Edit {{ promotion.name }}">Edit</a>{% endif %}</div>
+        </article>
+      {% empty %}<div class="inline-empty"><strong>No promotions yet.</strong><p>Add an offer to schedule prices for selected products, categories or locations.</p></div>{% endfor %}</div>
+    </section>
+    {% if can_manage %}<aside class="form-card"><p class="eyebrow">{% if editing %}EDIT PROMOTION{% else %}NEW SCHEDULE{% endif %}</p><h2>{% if editing %}Update pricing{% else %}Create promotion{% endif %}</h2>
+      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}{% if field.name == "name" or field.name == "section" or field.name == "active" or field.name == "discount_type" or field.name == "value" %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endif %}{% endfor %}
+        <details class="form-disclosure" {% if form.errors %}open{% endif %}><summary>Schedule & recurrence</summary><p>Times use {{ business.timezone_name }}. Leave a date or time limit empty when it should not restrict the offer.</p>{% for field in form %}{% if field.name == "starts_at" or field.name == "ends_at" or field.name == "start_date" or field.name == "end_date" or field.name == "start_time" or field.name == "end_time" or field.name == "days_of_week" %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endif %}{% endfor %}</details>
+        <details class="form-disclosure promotion-targets" {% if form.errors %}open{% endif %}>
+          <summary>Products, categories &amp; locations</summary>
+          <p id="promotion-target-help">Leave targets empty to include all products and locations.</p>
+          <noscript><p>Hold Ctrl or Command to select multiple options.</p></noscript>
+          {% include "core/multi_picker.html" with field=form.products singular="product" plural="products" hint_id="promotion-target-help" only %}
+          {% include "core/multi_picker.html" with field=form.categories singular="category" plural="categories" hint_id="promotion-target-help" only %}
+          {% include "core/multi_picker.html" with field=form.locations singular="location" plural="locations" hint_id="promotion-target-help" only %}
+        </details>
+        <details class="form-disclosure" {% if form.errors %}open{% endif %}><summary>Priority & stacking</summary><p>Control how this offer combines with overlapping promotions.</p>{% for field in form %}{% if field.name == "priority" or field.name == "stackable" %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endif %}{% endfor %}</details>
+        <div class="management-actions"><button class="button button-dark form-submit">Save schedule</button>{% if editing %}<a class="button button-light" href="{% url 'promotions' business.slug %}">Cancel editing</a>{% endif %}</div>
+      </form>
+    </aside>{% endif %}
+  </div>
+</section>
+{% if can_manage %}{% include "core/multi_picker_assets.html" %}{% endif %}
+{% endblock %}

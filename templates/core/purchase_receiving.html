@@ -1,0 +1,31 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Receive {{ purchase.reference }} · Veyra{% endblock %}
+{% block content %}
+<section class="app-page" data-purchase-stream="{{ business.slug }}" data-purchase-id="{{ purchase.pk }}">
+  <div class="crumb"><a href="{% url 'purchases' business.slug %}">Purchase orders</a><span>/</span><a href="{% url 'purchase_detail' business.slug purchase.pk %}">{{ purchase.reference }}</a></div>
+  <div class="app-heading"><div><h1>Receive delivery</h1><p>{{ purchase.supplier_name }} · {{ purchase.location_name }}</p></div></div>
+  {% if can_receive %}
+  <p data-purchase-connection class="field-hint" role="status">Connecting to live purchases…</p>
+  <form method="post" class="form-stack" data-receiving-form>
+    {% csrf_token %}{{ form.idempotency_key }}
+    {% if form.non_field_errors or form.idempotency_key.errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}{{ form.idempotency_key.errors }}</div>{% endif %}
+    <section class="form-card">
+      <h2>Delivered items</h2><p class="field-hint">Enter quantities for this delivery. Accepted items add to stock. Rejected and damaged items stay outstanding.</p>
+      <button type="button" class="button button-light" data-fill-receiving hidden>Accept all remaining</button>
+      {% for line, fields in form.rows %}
+      <fieldset class="purchase-line" data-receiving-line="{{ line.pk }}" data-outstanding="{{ line.outstanding_quantity|floatformat:'3u' }}">
+        <legend>{{ line.item_name }} · {{ line.unit }}</legend>
+        <p>Ordered {{ line.ordered_quantity|floatformat:"-3" }} · Previously received <span data-received-quantity>{{ line.received_quantity|floatformat:"-3" }}</span> · <strong data-outstanding-label>{{ line.outstanding_quantity|floatformat:"-3" }} outstanding</strong></p>
+        <p class="field-hint">Unit cost Rp {{ line.unit_cost|floatformat:"2g" }}</p>
+        <div class="purchase-fields">{% for field in fields %}{% include "core/purchasing_field.html" %}{% endfor %}</div>
+      </fieldset>
+      {% endfor %}
+    </section>
+    <section class="form-card"><h2>Delivery record</h2>{% include "core/purchasing_field.html" with field=form.delivery_reference %}{% include "core/purchasing_field.html" with field=form.notes %}</section>
+    <div class="management-actions"><button class="button button-dark" data-record-receiving>Record delivery</button><a class="button button-light" href="{% url 'purchase_detail' business.slug purchase.pk %}">Back to purchase</a></div>
+  </form>
+  {% else %}<p class="form-error" role="alert">This purchase is unavailable for receiving.</p>{% endif %}
+</section>
+<script src="{% static 'core/purchasing.js' %}" defer></script>
+{% endblock %}

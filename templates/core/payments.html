@@ -1,0 +1,39 @@
+{% extends "core/base.html" %}
+{% block title %}Payment accounts · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Payment accounts</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / PAYMENTS</p><h1>Payment accounts</h1><p>Only this business owner can save or remove merchant credentials.</p></div><span class="role-badge">OWNER CONTROL</span></div>
+  
+  <div class="customer-layout">
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">SAVED CONNECTIONS</p><h2>{{ connections|length }} providers</h2></div></div>
+      <div class="product-list">{% for connection in connections %}<article class="product-row"><span class="product-icon">{{ connection.get_provider_display|slice:":1" }}</span><div><strong>{{ connection.get_provider_display }}</strong><small>{{ connection.merchant_id }} · {{ connection.get_environment_display }}</small><small>{% if connection.verified_at %}<strong class="status-badge status-ready">Configuration checked {{ connection.verified_at|date:"M j, Y H:i" }}</strong>{% else %}Credentials saved · configuration check pending{% endif %}</small></div><div class="management-actions"><form method="post">{% csrf_token %}<input type="hidden" name="action" value="verify"><input type="hidden" name="connection_id" value="{{ connection.pk }}"><button class="button button-light button-small" type="submit">Check configuration</button></form><form method="post" data-confirm="Remove {{ connection.get_provider_display }} credentials? New QRIS payments through this connection will stop.">{% csrf_token %}<input type="hidden" name="action" value="disconnect"><input type="hidden" name="connection_id" value="{{ connection.pk }}"><button class="text-button text-danger" type="submit">Remove credentials</button></form></div></article>{% empty %}<div class="inline-empty">No merchant credentials saved for this business.</div>{% endfor %}</div>
+      {% if transactions %}
+      <div class="section-heading"><div><p class="eyebrow">PAYMENT AUDIT LOG</p><h2>Recent QRIS Transactions</h2></div></div>
+      <div class="product-list">
+        {% for tx in transactions %}
+          <article class="product-row">
+            <span class="product-icon" aria-hidden="true">Q</span>
+            <div><strong>#{{ tx.order_id|stringformat:"s"|slice:":6"|upper }} · Rp {{ tx.amount }}</strong><small>{{ tx.get_provider_display }} ({{ tx.environment }}) · Ref: {{ tx.merchant_reference|default:"-" }} · Created {{ tx.created_at|date:"M j, H:i" }}</small></div>
+            <span class="status-badge status-{{ tx.status }}">
+              {{ tx.get_status_display|upper }}
+            </span>
+          </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="section-heading"><div><p class="eyebrow">ACCEPTING PAYMENTS</p><h2>QRIS availability</h2></div></div>
+      <p>Midtrans QRIS requires QRIS activation on the merchant account. BCA mobile can pay a Midtrans QRIS code when that method is enabled.</p>
+      <p>BCA offers a separate SNAP QRIS MPM dynamic QR API. Access requires BCA onboarding and approved credentials. Use the merchant credentials issued to this business. A configuration check does not confirm live payment acceptance or settlement.</p>
+      <p><a href="https://docs.midtrans.com/reference/qris" target="_blank" rel="noopener">Midtrans QRIS docs ↗</a> · <a href="https://www.bca.co.id/en/Campaign/2023/Migrasi-SNAP" target="_blank" rel="noopener">BCA SNAP QRIS MPM ↗</a></p>
+    </section>
+    <aside class="form-card"><p class="eyebrow">OWNER-ONLY SETTINGS</p><h2>Merchant credentials</h2><details class="form-disclosure" {% if form.errors or not connections %}open{% endif %}><summary>Save or replace credentials</summary><p>Veyra encrypts the credential object at rest. It will not show the secret again after saving.</p>
+      <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="save">{{ form.non_field_errors }}
+        {% for field in form %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="form-error">{{ error }}</small>{% endfor %}</label>{% endfor %}
+        <button class="button button-dark form-submit" type="submit">Encrypt and save <span aria-hidden="true">↗</span></button>
+      </form></details>
+    </aside>
+  </div>
+</section>
+{% endblock %}

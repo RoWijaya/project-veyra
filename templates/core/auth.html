@@ -1,0 +1,56 @@
+{% extends "core/auth_shell.html" %}
+{% block title %}{{ title|default:"Continue with Veyra" }} — Veyra{% endblock %}
+{% block account_layout %}{% if request.resolver_match.url_name == "password_reset_confirm" and not validlink %}account-state{% endif %}{% endblock %}
+{% block account_heading %}
+  {% with screen=request.resolver_match.url_name %}
+    {% if screen == "login" %}<p class="eyebrow">YOUR WORKSPACE</p><h1 id="account-title">Sign in</h1><p>Manage your businesses, orders and day-to-day operations.</p>
+    {% elif screen == "register" %}<p class="eyebrow">GET STARTED</p><h1 id="account-title">Create your account</h1><p>Use one Veyra account to manage the businesses you run.</p>
+    {% elif screen == "password_reset_confirm" and not validlink %}<p class="eyebrow">PASSWORD RESET</p><h1 id="account-title">This reset link is no longer available</h1><p>It may have expired or already been used. Request a new link to choose a password.</p>
+    {% elif screen == "password_reset_confirm" %}<p class="eyebrow">PASSWORD RESET</p><h1 id="account-title">Choose a new password</h1><p>Use a password you haven’t used elsewhere.</p>
+    {% elif screen == "password_reset" %}<p class="eyebrow">ACCOUNT RECOVERY</p><h1 id="account-title">Reset your password</h1><p>Enter your account email to request a reset link.</p>
+    {% elif screen == "resend_verification" %}<p class="eyebrow">EMAIL VERIFICATION</p><h1 id="account-title">Resend verification email</h1><p>Request a fresh link to verify your email address.</p>
+    {% else %}<h1 id="account-title">{{ title|default:"Continue with Veyra" }}</h1>{% if screen == "create_business" %}<p>Name your business to open its workspace.</p>{% endif %}{% endif %}
+  {% endwith %}
+{% endblock %}
+{% block account_content %}
+{% with screen=request.resolver_match.url_name %}
+  {% if screen == "password_reset_confirm" and not validlink %}
+    <div class="account-state-actions"><a class="button button-dark" href="{% url 'password_reset' %}">Request a new link</a><a class="account-inline-link" href="{% url 'login' %}">Back to sign in</a></div>
+  {% else %}
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    {% if form.errors %}
+      <div class="form-error form-error-summary" tabindex="-1" aria-labelledby="account-errors">
+        <strong id="account-errors">Check the following before continuing</strong>
+        {{ form.non_field_errors }}
+        <ul>{% for field in form.visible_fields %}{% if field.errors %}<li><a href="#{{ field.auto_id }}">{{ field.label }}</a></li>{% endif %}{% endfor %}</ul>
+      </div>
+    {% endif %}
+    <form method="post" class="form-stack">{% csrf_token %}
+      {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+      {% if form %}
+        {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+        {% for field in form.visible_fields %}{% include "core/auth_field.html" %}{% endfor %}
+      {% elif screen == 'login' %}
+        <div class="field"><label for="account-email">Email address</label>
+          <input id="account-email" type="email" name="email" autocomplete="email" value="{{ request.POST.email }}" required>
+        </div>
+        <div class="field"><label for="account-password">Password</label>
+          <div class="password-control" data-password-control>
+            <input id="account-password" type="password" name="password" autocomplete="current-password" required>
+            <button type="button" class="text-button password-toggle" data-password-toggle="password" aria-controls="account-password" hidden>Show</button>
+          </div>
+        </div>
+        <a class="forgot-link" href="{% url 'password_reset' %}">Forgot password?</a>
+      {% endif %}
+      <button class="button button-dark form-submit" type="submit">{% if screen == 'login' %}Sign in{% elif screen == 'register' %}Create account{% elif screen == 'create_business' %}Create business{% elif screen == 'password_reset' %}Send reset link{% elif screen == 'password_reset_confirm' %}Save new password{% elif screen == 'resend_verification' %}Send verification email{% else %}Continue{% endif %}</button>
+    </form>
+    {% if screen == "login" %}
+      {% if google_available %}
+        <form method="post" action="{% url 'google_start' %}" class="google-signin auth-alternative">{% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}<button class="button button-light" type="submit">Continue with Google</button></form>
+      {% endif %}
+      <div class="auth-switch"><p>New to Veyra? <a href="{% url 'register' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Create an account</a></p><a href="{% url 'resend_verification' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Resend verification email</a></div>
+    {% elif screen == "register" %}<p class="auth-switch">Already have an account? <a href="{% url 'login' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Sign in</a></p>
+    {% elif screen == "password_reset" or screen == "resend_verification" %}<p class="auth-switch"><a href="{% url 'login' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Back to sign in</a></p>{% endif %}
+  {% endif %}
+{% endwith %}
+{% endblock %}

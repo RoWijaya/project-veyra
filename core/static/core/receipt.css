@@ -1,0 +1,30 @@
+.receipt-layout { display:grid; grid-template-columns: minmax(0, 360px) minmax(0, 440px); gap:32px; align-items:start; }
+.receipt-paper { background:#fff; color:#171717; padding:16px; width:80mm; max-width:100%; box-sizing:border-box; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.receipt-paper h2 { font-size:24px; line-height:1.25; margin:0 0 8px; }
+.receipt-paper p { margin:4px 0; }
+.receipt-paper hr { border:0; border-top:1px solid #bbb; margin:14px 0; }
+.receipt-paper dl { margin:0; }
+.receipt-paper dl div, .receipt-items li > div { display:flex; justify-content:space-between; gap:12px; margin:6px 0; }
+.receipt-paper dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+.receipt-items { list-style:none; margin:0; padding:0; }
+.receipt-items li { margin:12px 0; break-inside:avoid; }
+.receipt-items small { display:block; }
+.receipt-total { font-size:18px; font-weight:700; }
+.receipt-reference { font-size:10px; }
+.receipt-print-options { padding:24px; border:1px solid var(--line, #ded5c8); background:var(--surface, #fffdf9); border-radius:12px; }
+.receipt-print-options h2 { margin-top:0; }
+.receipt-width-form { display:flex; gap:12px; align-items:end; margin-bottom:20px; }
+.receipt-width-form .field { flex:1; min-width:0; }
+.receipt-dispatch { margin:24px 0; display:grid; gap:12px; }
+.receipt-history { padding:0; list-style:none; }
+.receipt-history li { display:grid; gap:4px; border-bottom:1px solid #ded5c8; padding:12px 0; }
+.receipt-history small { overflow-wrap:anywhere; }
+@media(max-width:800px) { .receipt-layout { grid-template-columns:minmax(0,1fr); gap:24px; } .receipt-print-options { padding:16px; } .receipt-width-form { flex-wrap:wrap; } }
+@page { size:80mm 297mm; margin:0; }
+@media print {
+  body { margin:0!important; padding:0!important; background:white!important; }
+  .topbar,.footer,.business-sidebar,.skip-link,.flash-messages,.receipt-controls { display:none!important; }
+  .app-frame,main,.app-page,.receipt-layout { display:block!important; margin:0!important; padding:0!important; width:auto!important; max-width:none!important; }
+  .receipt-paper { padding:3mm; width:80mm; box-shadow:none; }
+  .receipt-reference { font-size:8px; }
+}

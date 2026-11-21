@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% block title %}Suppliers · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'inventory' business.slug %}">Inventory</a><span>/</span>Suppliers</div>
+  <div class="app-heading"><div><h1>Suppliers</h1><p>Manage contacts and review purchase history.</p></div>
+    {% if can_manage %}<a class="button button-dark" href="{% url 'supplier_create' business.slug %}">Add supplier</a>{% endif %}</div>
+  <section class="form-card">
+    <form method="get" class="list-toolbar">
+      <label class="field"><span>Search suppliers</span><input name="q" type="search" value="{{ query }}" maxlength="120"></label>
+      <label class="field"><span>Status</span><select name="status"><option value="">All</option><option value="active"{% if status == 'active' %} selected{% endif %}>Active</option><option value="inactive"{% if status == 'inactive' %} selected{% endif %}>Inactive</option></select></label>
+      <button class="button button-light">Filter</button>
+    </form>
+    <div class="product-list">{% for supplier in page_obj %}
+      <article class="product-row supplier-row"><div><a href="{% url 'supplier_detail' business.slug supplier.pk %}"><strong>{{ supplier.name }}</strong></a>
+      {% if supplier.contact_person or supplier.email %}<small>{{ supplier.contact_person }}{% if supplier.contact_person and supplier.email %} · {% endif %}{{ supplier.email }}</small>{% endif %}</div>
+      <span>{% if supplier.active %}Active{% else %}Inactive{% endif %}</span></article>
+    {% empty %}<p class="inline-empty">{% if query or status %}No suppliers match these filters.{% else %}No suppliers yet.{% endif %}</p>{% endfor %}</div>
+    {% include "core/pagination.html" %}
+  </section>
+</section>
+{% endblock %}

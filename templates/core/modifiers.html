@@ -1,0 +1,41 @@
+{% extends "core/base.html" %}
+{% block title %}Product options · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'catalog' business.slug %}">Product catalog</a><span>/</span>Product options</div>
+  <div class="app-heading"><div><h1>Product options</h1><p>Offer choices and add-ons at checkout and in POS.</p></div></div>
+  <div class="catalog-layout">
+    <section aria-label="Modifier groups">
+      <h2>Groups</h2>
+      <ul class="settings-list">
+        {% for group in groups %}<li><a href="{% url 'modifier_group_edit' business.slug group.pk %}"{% if group.pk == form.instance.pk %} aria-current="page"{% endif %}><div><strong>{{ group.name }}</strong><small>{{ group.min_selections }}–{{ group.max_selections }} selections · {% if group.active %}Active{% else %}Inactive{% endif %}</small></div><span aria-hidden="true">›</span></a></li>
+        {% empty %}<li class="inline-empty">Create a group to add options to your products.</li>{% endfor %}
+      </ul>
+      {% if form.instance.pk %}<a class="button button-light" href="{% url 'modifier_groups' business.slug %}">New group</a>{% endif %}
+    </section>
+    <form method="post" class="form-card form-stack" aria-label="Modifier group editor">
+      {% csrf_token %}
+      <h2>{% if form.instance.pk %}Edit {{ form.instance.name }}{% else %}New group{% endif %}</h2>
+      {{ form.non_field_errors }}
+      {% for field in form %}
+        {% if field.name == 'products' or field.name == 'locations' %}
+        <fieldset class="modifier-targets"><legend>{{ field.label }}</legend>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{{ field.errors }}</fieldset>
+        {% else %}<div class="field">{{ field.label_tag }}{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{{ field.errors }}</div>{% endif %}
+      {% endfor %}
+      <h3>Choices</h3>
+      <p class="field-hint">Enter a name and any added cost. Blank choices can be left empty.</p>
+      {{ option_forms.management_form }}
+      {{ option_forms.non_form_errors }}
+      {% for option in option_forms %}
+      <fieldset class="modifier-editor-option">
+        <legend>{% if option.instance.pk %}{{ option.instance.name }}{% else %}New choice{% endif %}</legend>
+        {{ option.non_field_errors }}
+        {% for field in option.hidden_fields %}{{ field }}{{ field.errors }}{% endfor %}
+        {% for field in option.visible_fields %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+      </fieldset>
+      {% endfor %}
+      <button class="button button-dark form-submit">Save group</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

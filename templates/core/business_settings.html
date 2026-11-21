@@ -1,0 +1,14 @@
+{% extends "core/base.html" %}
+{% block title %}Settings · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Settings</div>
+  <header class="app-heading"><div><h1>Settings</h1><p>Manage this business and your account.</p></div></header>
+  <ul class="settings-list">
+    {% for link in nav.settings_links %}
+      <li><a href="{{ link.url }}"><span><strong>{{ link.label }}</strong><small>{{ link.description }}</small></span><span aria-hidden="true">›</span></a></li>
+    {% endfor %}
+  </ul>
+  <p><a class="button button-light" href="{% url 'business_dashboard' business.slug %}">Back to overview</a></p>
+</section>
+{% endblock %}

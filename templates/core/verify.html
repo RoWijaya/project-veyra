@@ -1,0 +1,15 @@
+{% extends "core/auth_shell.html" %}
+{% block title %}{% if valid %}Email verified{% else %}Verification link unavailable{% endif %} — Veyra{% endblock %}
+{% block account_layout %}account-state{% endblock %}
+{% block account_heading %}
+<p class="eyebrow">EMAIL VERIFICATION</p>
+<h1 id="account-title">{% if valid %}Your email is verified{% else %}This verification link is no longer available{% endif %}</h1>
+<p>{% if valid %}Sign in to open your account and set up your business.{% else %}It may have expired or already been used. If you’ve already verified your email, sign in to continue.{% endif %}</p>
+{% endblock %}
+{% block account_content %}
+<div class="account-state-actions">
+  {% if valid %}<a class="button button-dark" href="{% url 'login' %}">Sign in</a>
+  {% else %}<a class="button button-dark" href="{% url 'resend_verification' %}">Request a new link</a>
+    <a class="account-inline-link" href="{% url 'login' %}">Back to sign in</a>{% endif %}
+</div>
+{% endblock %}

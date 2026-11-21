@@ -1,0 +1,33 @@
+{% extends "core/base.html" %}
+{% block title %}Ordering page · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_settings' business.slug %}">Settings</a><span>/</span>Ordering page</div>
+  <div class="app-heading"><div><h1>Ordering page</h1><p>Customize the menu guests open from a table QR or takeaway link.</p></div>
+    {% if preview_url %}<a class="button button-light" href="{{ preview_url }}" target="_blank" rel="noopener">Preview guest menu <span aria-hidden="true">↗</span><span class="sr-only"> (opens a new tab)</span></a>{% endif %}
+  </div>
+  {% if not preview_url %}<p class="field-hint">Add a <a class="quiet-link" href="{% url 'tables' business.slug %}">table QR</a> or enable takeaway at a <a class="quiet-link" href="{% url 'locations' business.slug %}">location</a> to preview the guest menu.</p>{% endif %}
+  <section class="form-card ordering-page-form">
+    <form method="post" enctype="multipart/form-data" class="form-stack" data-media-form>
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+      {% include "core/purchasing_field.html" with field=form.display_name %}
+      {% include "core/purchasing_field.html" with field=form.introduction %}
+      <fieldset class="catalog-media">
+        <legend>Menu banner</legend>
+        <p class="field-hint">JPEG, PNG or WebP up to 5 MB. Use a wide photo and keep important details near the center.</p>
+        {% if ordering_page.has_banner %}<figure data-current-image>
+          <img class="media-preview ordering-banner-preview" src="{% url 'ordering_banner_image' business.slug %}" alt="{{ ordering_page.banner_alt }}" width="768" height="256" data-media-image>
+          <figcaption class="field-hint">Current banner</figcaption>
+        </figure>{% endif %}
+        <img class="media-preview ordering-banner-preview" data-upload-preview alt="Selected banner preview" width="768" height="256" hidden>
+        {% include "core/purchasing_field.html" with field=form.image %}
+        {% include "core/purchasing_field.html" with field=form.banner_alt %}
+        {% if form.remove_image %}{% include "core/purchasing_field.html" with field=form.remove_image %}{% endif %}
+      </fieldset>
+      <div class="management-actions"><button class="button button-dark">Save ordering page</button><a class="button button-light" href="{% url 'business_settings' business.slug %}">Cancel</a></div>
+    </form>
+  </section>
+  <p class="ordering-campaign-link"><a class="quiet-link" href="{% url 'banners' business.slug %}">Manage campaign banners</a></p>
+</section>
+{% endblock %}

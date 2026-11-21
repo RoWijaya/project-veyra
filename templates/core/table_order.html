@@ -1,0 +1,24 @@
+{% extends "core/base.html" %}
+{% block title %}{{ table.business.name }} — Order at {{ table.name }}{% endblock %}
+{% block content %}
+<section class="app-page guest-order">
+  <p class="eyebrow">{{ table.business.name|upper }}{% if table.area %} / {{ table.area|upper }}{% endif %}</p>
+    <div class="app-heading"><div><p class="eyebrow">ORDER FROM YOUR TABLE</p><h1>{{ table.name }} menu</h1><p>Choose your items. Your order and tracking link stay private to this browser.</p></div></div>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" class="guest-menu" data-order-cart data-product-picker data-guest-menu data-menu-url="{% url 'table_menu_data' table_token %}" data-menu-token="{{ table_token }}">{% csrf_token %}<input type="hidden" name="idempotency_key" value="{{ idempotency_key }}"><input type="hidden" name="tracking_token" value="{{ tracking_token }}">
+      {% if products %}<div class="ordering-filters" data-ordering-controls hidden>
+        <label class="field"><span>Find something on the menu</span><input type="search" data-product-search placeholder="Search by name" autocomplete="off"></label>
+        <label class="field"><span>Category</span><select data-product-category><option value="">All categories</option></select></label>
+        <button type="button" class="text-button" data-reset-product-filters>Reset filters</button>
+      </div><p class="filter-result" data-product-results role="status" hidden></p>{% endif %}
+      <div data-menu-products data-product-results-list>{% for product in products %}<article class="menu-item" data-menu-product="{{ product.pk }}" data-filter-product data-product-category-name="{{ product.category.name|default:'Uncategorized' }}"><h2 data-product-name data-product-label>{{ product.name }}{% if product.price_quote.promotions %}<small class="promotion-badge">{% for promotion in product.price_quote.promotions %}{{ promotion.name }}{% if not forloop.last %} · {% endif %}{% endfor %}</small>{% endif %}</h2><strong data-product-price>{% if product.price_quote.promotions %}<s>Rp {{ product.price|floatformat:0 }}</s> {% endif %}Rp {{ product.display_price|floatformat:0 }}</strong><label class="field"><span>Quantity</span><input type="number" name="quantity_{{ product.pk }}" value="0" min="0" max="99" inputmode="numeric" aria-label="Quantity of {{ product.name }}" data-cart-quantity data-unit-price="{{ product.display_price }}"></label></article>{% empty %}<div class="inline-empty">The menu is not available right now.</div>{% endfor %}</div>
+      <p class="inline-empty" data-product-no-results hidden>No menu items match. Try another name or reset the filters.</p>
+      {% if products %}<section class="selection-summary" aria-label="Your order">
+        <div class="selection-summary-heading"><h2>Your order</h2><button type="button" class="text-button" data-clear-selection hidden>Clear selection</button></div>
+        <ul class="selection-lines" data-selection-lines hidden></ul><p class="selection-empty" data-selection-empty>Choose quantities from the menu to get started.</p>
+        <p class="selection-total" role="status" aria-atomic="true"><span><span data-cart-count>0</span> items</span><strong>Rp <span data-cart-total>0</span></strong></p>
+        <p class="field-hint">Current menu prices are confirmed when you place the order.</p>
+      </section><fieldset class="field payment-options"><legend>How would you like to pay?</legend><label><input type="radio" name="payment_method" value="counter" checked> Pay at the counter</label>{% for connection in providers %}<label><input type="radio" name="payment_method" value="qris:{{ connection.provider }}"> QRIS · {{ connection.get_provider_display }}</label>{% endfor %}</fieldset><label class="field"><span>Special instructions (optional)</span><textarea name="note" maxlength="500" rows="3"></textarea></label><button class="button button-dark" data-cart-submit>Place order</button>{% endif %}
+    </form>
+</section>
+{% endblock %}

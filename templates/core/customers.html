@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Customers · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Customers</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / CUSTOMERS</p><h1>Customers</h1></div></div>
+  <div class="customer-layout">
+    <section>
+      <form class="search-row" method="get"><label class="field"><span>Find a customer</span><input type="search" name="q" value="{{ query }}" placeholder="Search by name"></label><button class="button button-dark">Search</button>{% if query %}<a class="button button-light" href="{% url 'customers' business.slug %}">Clear search</a>{% endif %}</form>
+      <div class="section-heading"><div><p class="eyebrow">CUSTOMER LIST</p><h2>{{ total_count }} customers</h2></div></div>
+      {% if customers %}<div class="product-list">{% for customer in customers %}<article class="product-row"><span class="product-icon">{{ customer.name|slice:":1"|upper }}</span><div><strong>{{ customer.name }}</strong><small>{{ customer.email|default:"No email" }}{% if customer.phone %} · {{ customer.phone }}{% endif %}</small></div><b>{{ customer.created_at|date:"M j" }}</b></article>{% endfor %}</div>{% else %}<div class="inline-empty">{% if query %}No customers match “{{ query }}”. Try another name or clear the search.{% else %}No customers yet. Add contact details when a customer chooses to share them.{% endif %}</div>{% endif %}
+      {% include "core/pagination.html" %}
+    </section>
+    {% if can_manage %}<aside class="form-card"><p class="eyebrow">CUSTOMER DETAILS</p><h2>Add a customer</h2>
+      
+      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endfor %}<button class="button button-dark form-submit">Save customer <span aria-hidden="true">↗</span></button></form>
+    </aside>{% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "core/base.html" %}
+{% block title %}Categories · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'catalog' business.slug %}">Product catalog</a><span>/</span>Categories</div>
+  <div class="app-heading"><div><h1>Categories</h1><p>Group products and set the order guests browse them.</p></div></div>
+  <div class="catalog-layout">
+    <section aria-labelledby="category-list-title">
+      <div class="section-heading"><h2 id="category-list-title">Your categories</h2></div>
+      <form method="get" action="{% url 'categories' business.slug %}" class="list-toolbar catalog-filters">
+        <label class="field"><span>Search categories</span><input type="search" name="q" value="{{ search }}" maxlength="100"></label>
+        <button class="button button-light">Search</button>
+        {% if search %}<a class="quiet-link" href="{% url 'categories' business.slug %}">Clear search</a>{% endif %}
+      </form>
+      <div class="catalog-category-list">
+        {% for category in page_obj %}
+          <article class="catalog-category-row">
+            <div><h3>{{ category.name }}</h3>{% if category.description %}<p>{{ category.description }}</p>{% endif %}
+              <p class="field-hint">{{ category.product_count }} product{{ category.product_count|pluralize }} · Position {{ category.sort_order }} · {% if category.active %}Visible on menu{% else %}Hidden on menu{% endif %}</p></div>
+            {% if can_manage %}<a class="button button-light button-small" href="{% url 'category_edit' business.slug category.pk %}" aria-label="Edit {{ category.name }}">Edit</a>{% endif %}
+          </article>
+        {% empty %}<p class="inline-empty">{% if search %}No matching categories.{% else %}No categories yet. Add one to group your products.{% endif %}</p>{% endfor %}
+      </div>
+      {% include "core/pagination.html" %}
+    </section>
+    {% if can_manage %}<section class="form-card">
+      <h2>{% if editing %}Edit category{% else %}New category{% endif %}</h2>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      <form method="post" class="form-stack">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}{% include "core/purchasing_field.html" %}{% endfor %}
+        <div class="management-actions"><button class="button button-dark">Save category</button>
+          {% if editing %}<a class="button button-light" href="{% url 'categories' business.slug %}">Cancel</a>{% endif %}
+        </div>
+      </form>
+      {% if editing %}<form method="post" class="catalog-remove" data-confirm="Delete {{ editing.name }}? Categories in use must be detached first.">
+        {% csrf_token %}<button class="button button-light button-danger" name="action" value="delete">Delete category</button>
+      </form>{% endif %}
+    </section>{% endif %}
+  </div>
+</section>
+{% endblock %}

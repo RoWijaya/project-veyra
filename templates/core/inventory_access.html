@@ -1,0 +1,13 @@
+{% extends "core/base.html" %}
+{% block title %}Inventory location access · Veyra{% endblock %}
+{% block content %}<section class="app-page">
+  <div class="crumb"><a href="{% url 'team' business.slug %}">Team access</a><span>/</span>Inventory locations</div>
+  <div class="app-heading"><div><h1>Inventory locations</h1><p>{{ member.user.email }}</p></div></div>
+  <form class="form-card form-stack" method="post">
+    {% csrf_token %}{{ form.non_field_errors }}
+    {% include "core/purchasing_field.html" with field=form.restricted %}
+    <p class="field-hint">With the limit enabled, this collaborator can access stock and purchases only at the selected locations. Leave the selection empty to deny access to all locations.</p>
+    <fieldset class="permission-fields"><legend>Allowed locations</legend>{{ form.locations }}{{ form.locations.errors }}</fieldset>
+    <div class="management-actions"><button class="button button-dark">Save location access</button><a class="button button-light" href="{% url 'team' business.slug %}">Back to Team</a></div>
+  </form>
+</section>{% endblock %}

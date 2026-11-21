@@ -1,0 +1,14 @@
+{% extends "core/auth_shell.html" %}
+{% block title %}Check your email — Veyra{% endblock %}
+{% block account_layout %}account-state{% endblock %}
+{% block account_heading %}
+<p class="eyebrow">EMAIL VERIFICATION</p>
+<h1 id="account-title">Check your email</h1>
+<p>We’ll send a verification link if the address is eligible. Check your spam folder if the email doesn’t arrive.</p>
+{% endblock %}
+{% block account_content %}
+<div class="account-state-actions">
+  <a class="button button-dark" href="{% url 'login' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Back to sign in</a>
+  <a class="account-inline-link" href="{% url 'resend_verification' %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">Request another email</a>
+</div>
+{% endblock %}

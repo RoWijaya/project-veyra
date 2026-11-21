@@ -1,0 +1,26 @@
+<section class="form-card" id="product-form" aria-labelledby="product-form-title">
+  <h2 id="product-form-title">{% if editing %}Edit product{% else %}New product{% endif %}</h2>
+  <form method="post" enctype="multipart/form-data" class="form-stack" data-media-form>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+    {% for field in form %}{% if field.name != "image" and field.name != "image_alt" and field.name != "remove_image" %}
+      {% include "core/purchasing_field.html" %}
+    {% endif %}{% endfor %}
+    <fieldset class="catalog-media">
+      <legend>Product image</legend>
+      <p class="field-hint">JPEG, PNG or WebP up to 5 MB. A product can be sold without an image.</p>
+      {% if editing.image %}<figure data-current-image>
+        <img class="media-preview" src="{% url 'product_image' business.slug editing.pk %}" alt="{{ editing.image.alt_text }}" width="480" height="320" data-media-image>
+        <figcaption class="field-hint">Current image</figcaption>
+      </figure>{% endif %}
+      <img class="media-preview" data-upload-preview alt="Selected image preview" width="480" height="320" hidden>
+      {% include "core/purchasing_field.html" with field=form.image %}
+      {% include "core/purchasing_field.html" with field=form.image_alt %}
+      {% if form.remove_image %}{% include "core/purchasing_field.html" with field=form.remove_image %}{% endif %}
+    </fieldset>
+    <div class="management-actions">
+      <button class="button button-dark">Save product</button>
+      {% if editing %}<a class="button button-light" href="{% url 'catalog' business.slug %}">Cancel</a>{% endif %}
+    </div>
+  </form>
+</section>

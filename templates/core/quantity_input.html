@@ -1,0 +1,5 @@
+<div class="quantity-stepper" data-quantity-stepper>
+  <button class="quantity-button" type="button" data-quantity-step="-1" aria-label="Decrease quantity of {{ product.name }}" hidden>−</button>
+  <input type="number" min="{{ minimum }}" max="99" step="1" value="{{ initial_quantity|default:minimum }}" name="{{ input_name }}" aria-label="Quantity of {{ product.name }}" inputmode="numeric"{% if input_name != "quantity" %} data-cart-quantity data-unit-price="{{ product.display_price }}"{% endif %}>
+  <button class="quantity-button" type="button" data-quantity-step="1" aria-label="Increase quantity of {{ product.name }}" hidden>+</button>
+</div>

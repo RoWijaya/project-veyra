@@ -1,0 +1,48 @@
+{% extends "core/customer_base.html" %}
+{% block content %}
+{% include "core/store_location.html" %}
+<div id="store-intro">
+  <h1>Our menu</h1>
+  {% if ordering_page.introduction %}<p class="store-introduction">{{ ordering_page.introduction }}</p>{% endif %}
+  {% if ordering_page.has_banner %}<img class="store-page-banner" src="{% url 'guest_ordering_banner' table_token %}?v={{ ordering_page.updated_at|date:'U.u' }}" alt="{{ ordering_page.banner_alt }}" width="1024" height="340" data-media-image>{% endif %}
+</div>
+<section class="store-banners" id="store-banners" aria-label="Featured promotions">
+  {% for banner in banners %}<article class="store-banner">
+    <img src="{{ banner.image_url }}" alt="{{ banner.alt_text }}" data-media-image width="800" height="400"{% if not forloop.first %} loading="lazy"{% endif %}>
+    <div><h2>{{ banner.headline }}</h2>{% if banner.description %}<p>{{ banner.description }}</p>{% endif %}<a class="button button-light" href="#menu-products" data-banner-type="{{ banner.target.type }}" data-banner-target="{{ banner.target.value }}">{{ banner.cta_text }}</a></div>
+  </article>{% endfor %}
+</section>
+<div class="store-filters" data-store-filters hidden>
+  <label class="field"><span class="sr-only">Search the menu</span><input type="search" name="search" placeholder="Search the menu" data-menu-search autocomplete="off"></label>
+  <div class="store-categories" id="store-categories" role="group" aria-label="Menu categories">
+    <button type="button" class="button button-light" data-menu-category="" aria-pressed="true">All<span class="sr-only"> categories</span></button>
+    {% for category in categories %}<button type="button" class="button button-light" data-menu-category="{{ category.pk }}" aria-pressed="false">{{ category.name }}</button>{% endfor %}
+  </div>
+</div>
+<p class="sr-only" data-menu-count role="status"></p>
+<section id="menu-products" aria-label="Menu products">
+  <div class="store-products" id="store-products">
+  {% for product in products %}<article class="store-product" id="product-{{ product.pk }}" data-menu-product="{{ product.pk }}" data-name="{{ product.name }}" data-category="{% if product.category.active %}{{ product.category_id }}{% endif %}" data-promotions="{% for promotion in product.price_quote.promotions %}{{ promotion.id }} {% endfor %}">
+    {% if product.image %}<img class="store-product-image" src="{% url 'guest_product_image' table_token product.pk %}?v={{ product.image.updated_at|date:'U.u' }}" alt="{{ product.image.alt_text }}" width="400" height="300" loading="lazy" data-media-image>{% endif %}
+    <div class="store-product-copy"><div class="store-product-heading"><h2>{{ product.name }}</h2>
+      <p class="store-price">{% if product.price_quote.promotions %}<s>Rp {{ product.price|floatformat:0 }}</s> {% endif %}<strong>Rp {{ product.display_price|floatformat:0 }}</strong></p></div>{% if product.category.active %}<p class="field-hint">{{ product.category.name }}</p>{% endif %}
+      {% if product.description %}<p class="store-product-description">{{ product.description }}</p>{% endif %}
+      {% if product.price_quote.promotions %}<p class="store-promotion">{% for promotion in product.price_quote.promotions %}{{ promotion.name }}{% if not forloop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+      <details class="store-product-detail"><summary class="button button-light">View product</summary>
+        <form method="post" action="{{ cart_url }}" data-cart-add data-configurable-item>{% csrf_token %}<input type="hidden" name="action" value="add"><input type="hidden" name="product" value="{{ product.pk }}"><input type="hidden" name="revision" value="{{ cart.revision }}">
+          {% if product.order_modifier_groups %}
+          {% include "core/modifier_choices.html" with groups=product.order_modifier_groups option_name="modifiers" %}
+          <p class="modifier-price" aria-live="polite">Item price <strong data-modifier-price data-base-price="{{ product.display_price|floatformat:'2u' }}">Rp {{ product.display_price|floatformat:0 }}</strong></p>
+          {% endif %}
+          {% include "core/quantity_input.html" with minimum=1 input_name="quantity" %}
+          <button class="button button-dark"{% if not subscription_allows_orders %} disabled{% endif %}>Add to order</button>
+        </form>
+      </details>
+    </div>
+  </article>{% empty %}<p class="inline-empty">The menu is not available right now. Please ask the team for help.</p>{% endfor %}
+  </div>
+  <p class="inline-empty" data-menu-empty hidden>No products match. Try another name or category.</p>
+</section>
+<p data-cart-feedback role="status"></p>
+<a class="button button-dark store-order-link" href="{{ cart_url }}">Review your order · <span data-cart-count>{{ cart_count }}</span></a>
+{% endblock %}

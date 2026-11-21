@@ -1,0 +1,9 @@
+{% if page_obj %}<div class="report-table" tabindex="0" role="region" aria-label="Purchase orders">
+  <table><thead><tr><th scope="col">Reference</th><th scope="col">Supplier</th><th scope="col">Destination</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Total</th></tr></thead><tbody>
+  {% for purchase in page_obj %}<tr>
+    <td><a href="{% url 'purchase_detail' business.slug purchase.pk %}">{{ purchase.reference }}</a></td><td>{{ purchase.supplier_name }}</td>
+    <td>{{ purchase.location_name }}</td><td>{{ purchase.get_status_display }}</td><td>{{ purchase.created_at|date:"d M Y" }}</td>
+    <td>Rp {{ purchase.total|floatformat:"2g" }}</td>
+  </tr>{% endfor %}
+  </tbody></table>
+</div>{% include "core/pagination.html" %}{% else %}<p class="inline-empty">No purchase orders to display.</p>{% endif %}

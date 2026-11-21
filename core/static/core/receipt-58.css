@@ -1,0 +1,5 @@
+.receipt-paper { width:58mm; font-size:12px; }
+.receipt-paper h2 { font-size:20px; }
+.receipt-total { font-size:16px; }
+@page { size:58mm 297mm; margin:0; }
+@media print { .receipt-paper { width:58mm; padding:2mm; } }

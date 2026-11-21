@@ -1,0 +1,66 @@
+{% extends "core/customer_base.html" %}
+{% block title %}Your order — {{ store_name }}{% endblock %}
+{% block content %}
+<a class="button button-light" href="{{ menu_url }}">Back to menu</a>
+<h1>Your order</h1>
+{% include "core/store_location.html" %}
+<p class="sr-only" data-quantity-feedback role="status"></p>
+<div id="store-unavailable">
+{% if unavailable_items %}<div class="form-error" role="alert">An item is no longer available.<form method="post">{% csrf_token %}<input type="hidden" name="revision" value="{{ cart.revision }}"><button class="button button-light" name="action" value="remove_unavailable">Remove unavailable items</button></form></div>{% endif %}
+</div>
+{% if lines %}<div class="store-order-layout" id="store-order-layout">
+<section class="store-order-lines" id="store-order-lines" aria-label="Order items">
+  {% for line in lines %}<article class="store-cart-item" data-cart-line="{{ line.key }}">
+    {% if line.product.image %}<img class="store-cart-image" src="{% url 'guest_product_image' table_token line.product.pk %}?v={{ line.product.image.updated_at|date:'U.u' }}" alt="{{ line.product.image.alt_text }}" width="96" height="96" loading="lazy" data-media-image>{% endif %}
+    <div><div class="store-cart-title"><h2>{{ line.product.name }}</h2>{% if not line.option_error %}<strong>Rp {{ line.total|floatformat:"-2" }}</strong>{% endif %}</div>
+    {% if line.option_error %}<p class="form-error">{{ line.option_error }}</p>{% else %}<p>Rp {{ line.unit_price|floatformat:"-2" }} each</p>{% endif %}
+    {% if line.modifiers %}<ul class="modifier-summary">{% for option in line.modifiers %}<li>{{ option.group }} · {{ option.name }}{% if option.surcharge != '0.00' %} (+Rp {{ option.surcharge|floatformat:"-2" }}){% endif %}</li>{% endfor %}</ul>{% endif %}
+    {% if line.product.price_quote.promotions %}<p class="store-promotion">{% for promotion in line.product.price_quote.promotions %}{{ promotion.name }}{% if not forloop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+    <form method="post" class="store-quantity" data-cart-stepper="{{ line.key }}">{% csrf_token %}<input type="hidden" name="revision" value="{{ cart.revision }}"><input type="hidden" name="line" value="{{ line.key }}">
+      <div class="quantity-stepper" role="group" aria-label="Quantity of {{ line.product.name }}">
+        <button class="quantity-button" type="submit" name="action" value="decrement" aria-label="Decrease quantity of {{ line.product.name }}"{% if line.quantity <= 1 %} disabled{% endif %}>−</button>
+        <output aria-label="Quantity">{{ line.quantity }}</output>
+        <button class="quantity-button" type="submit" name="action" value="increment" aria-label="Increase quantity of {{ line.product.name }}"{% if line.quantity >= 99 %} disabled{% endif %}>+</button>
+      </div>
+      <button class="button button-light" name="action" value="remove">Remove item<span class="sr-only"> {{ line.product.name }}</span></button>
+    </form>
+    {% if line.product.order_modifier_groups or line.option_error %}
+    <details class="cart-options"{% if line.option_error %} open{% endif %}><summary>Edit options</summary>
+      <form method="post" data-configurable-item>{% csrf_token %}
+        <input type="hidden" name="revision" value="{{ cart.revision }}"><input type="hidden" name="line" value="{{ line.key }}">
+        {% include "core/modifier_choices.html" with groups=line.product.order_modifier_groups selected=line.selected option_name="modifiers" %}
+        <p class="modifier-price" aria-live="polite">Item price <strong data-modifier-price data-base-price="{{ line.product.display_price|floatformat:'2u' }}">Rp {{ line.unit_price|default:line.product.display_price|floatformat:0 }}</strong></p>
+        <button class="button button-light" name="action" value="customize">Save options</button>
+      </form>
+    </details>{% endif %}
+    </div>
+  </article>{% endfor %}
+</section>
+<form method="post" class="store-checkout">{% csrf_token %}<input type="hidden" name="revision" value="{{ cart.revision }}"><input type="hidden" name="quote" value="{{ cart_quote }}">
+  {% if dine_in_available and takeaway_available %}
+  <fieldset class="store-payment">
+    <legend>How would you like your order?</legend>
+    <label><input type="radio" name="order_type" value="dine_in"{% if order_type == 'dine_in' %} checked{% endif %}> Dine in · {{ table.name }}</label>
+    <label><input type="radio" name="order_type" value="takeaway"{% if order_type == 'takeaway' %} checked{% endif %}> Takeaway · collect at {{ location.name }}</label>
+  </fieldset>
+  {% else %}<input type="hidden" name="order_type" value="{{ order_type }}">
+    {% if not dine_in_available and location.address %}<p class="field-hint">Collect at {{ location.address }}.</p>{% endif %}
+  {% endif %}
+  <label class="field"><span>Special instructions (optional)</span><textarea name="note" maxlength="500" rows="3">{{ checkout_note|default_if_none:cart.note }}</textarea></label>
+  <fieldset class="store-payment"><legend>Payment</legend><label><input type="radio" name="payment_method" value="counter"{% if selected_payment == 'counter' %} checked{% endif %}> Pay at the counter</label>{% for provider in providers %}<label><input type="radio" name="payment_method" value="qris:{{ provider.provider }}"{% if provider.provider in selected_payment %} checked{% endif %}> QRIS · {{ provider.get_provider_display }}</label>{% endfor %}</fieldset>
+  <button class="button button-light" name="action" value="save">Save instructions and payment</button>
+  <p class="field-hint">Save these details before returning to the menu. Prices are confirmed when you place your order.</p>
+  <div id="store-voucher" data-applied="{{ voucher_code }}">
+    {% if vouchers_allowed or voucher_code %}
+    <label class="field"><span>Voucher code</span><input name="voucher_code" value="{{ voucher_input|default_if_none:voucher_code }}" maxlength="32" autocomplete="off" autocapitalize="characters"></label>
+    <div class="voucher-actions"><button class="button button-light" name="action" value="apply_voucher">Apply voucher</button>
+    {% if voucher_code %}<button class="button button-light" name="action" value="remove_voucher">Remove voucher</button>{% endif %}</div>
+    {% if voucher_error %}<p class="form-error" role="alert">{{ voucher_error }} Apply another code or remove this voucher to continue.</p>
+    {% elif voucher %}<p class="field-hint" role="status">{{ voucher_code }} applied.</p>{% endif %}
+    {% endif %}
+  </div>
+  <div class="store-totals" id="store-totals"><p><span>Subtotal</span><strong>Rp {{ subtotal|floatformat:"-2" }}</strong></p>{% if discount %}<p><span>Promotions</span><strong>−Rp {{ discount|floatformat:"-2" }}</strong></p>{% endif %}{% if voucher %}<p><span>Voucher · {{ voucher_code }}</span><strong>−Rp {{ voucher.discount|floatformat:"-2" }}</strong></p>{% endif %}<p class="store-total"><span>Total</span><strong>Rp {{ total|floatformat:"-2" }}</strong></p></div>
+  <button class="button button-dark" name="action" value="checkout"{% if not subscription_allows_orders or unavailable_items or invalid_options or voucher_error %} disabled{% endif %}>Place order</button>
+</form>
+</div>{% else %}<div class="store-empty"><h2>Your order is empty</h2><p>Choose something from the menu to get started.</p><a class="button button-dark" href="{{ menu_url }}">Browse menu</a></div>{% endif %}
+{% endblock %}

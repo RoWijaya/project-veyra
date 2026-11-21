@@ -1,0 +1,52 @@
+{% extends "core/base.html" %}
+{% block title %}Stations · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Stations & devices</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / OPERATIONS</p><h1>Stations & devices</h1><p>Devices receive a restricted, persistent station session. Revoke any session here.</p></div><span class="role-badge">OWNER CONTROL</span></div>
+  
+  <div class="customer-layout">
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">CONFIGURED STATIONS</p><h2>{{ stations|length }} stations</h2></div></div>
+      <div class="list-toolbar"><label class="field"><span>Search stations</span><input type="search" data-list-filter data-filter-target="stations-list" placeholder="Name, kind or location" autocomplete="off"></label><p data-filter-status="stations-list" role="status" aria-live="polite"></p></div><div class="product-list" id="stations-list">
+        {% for station in stations %}
+          <article class="product-row" data-filter-row>
+            <span class="product-icon">{{ station.name|slice:":1"|upper }}</span>
+            <div><strong>{{ station.name }}</strong><small>{{ station.get_kind_display }} · Mode: {{ station.get_handling_mode_display }}{% if station.location %} · {{ station.location.name }}{% endif %}{% if station.printer %} · Printer: {{ station.printer.name }}{% endif %} · {{ station.capabilities|length }} capabilities</small><details class="form-disclosure"><summary>Device access & sessions</summary><p>{{ station.capabilities|join:", "|default:"No capabilities granted" }}</p>
+              {% for device in station.devices.all %}<div class="device-row"><small>{{ device.label }} · {% if device.revoked_at %}revoked{% else %}paired{% endif %}{% if device.last_seen_at %} · seen {{ device.last_seen_at|date:"M j, H:i" }}{% endif %}</small>{% if not device.revoked_at %}<form method="post" class="inline-form" data-confirm="Revoke the session for {{ device.label }}? This device will lose access.">{% csrf_token %}<input type="hidden" name="action" value="revoke"><input type="hidden" name="device_id" value="{{ device.pk }}"><button class="text-button text-danger" type="submit">Revoke session</button></form>{% endif %}</div>{% empty %}<p>No devices paired yet.</p>{% endfor %}</details>
+            </div>
+            <div class="station-actions management-actions">
+              <a href="{% url 'station_screen' business.slug station.pk %}" class="button button-light button-small">Open preparation screen</a>
+              <form method="post">{% csrf_token %}<input type="hidden" name="action" value="pair"><input type="hidden" name="station_id" value="{{ station.pk }}"><button class="button button-dark button-small" type="submit">Issue pairing code</button></form>
+            </div>
+          </article>
+        {% empty %}<div class="inline-empty">Create a station before pairing an operational device.</div>{% endfor %}
+      </div>
+
+      <div class="section-heading"><div><p class="eyebrow">CONFIGURED PRINTERS</p><h2>{{ printers|length }} printers</h2></div></div>
+      <div class="product-list">
+        {% for printer in printers %}
+          <article class="product-row">
+            <span class="product-icon" aria-hidden="true">P</span>
+            <div><strong>{{ printer.name }}</strong><small>{{ printer.get_printer_type_display }} · {{ printer.paper_width }}{% if printer.location %} · {{ printer.location.name }}{% endif %}</small></div>
+            <b>{{ printer.get_status_display|upper }}</b>
+          </article>
+        {% empty %}<div class="inline-empty">No printers configured. Use a preparation screen for digital tickets.</div>{% endfor %}
+      </div>
+    </section>
+    <aside class="form-card"><p class="eyebrow">NEW DEVICE WORKFLOW</p><h2>Create a station</h2><p>Choose the exact server capabilities this device needs. You can pair it after creation.</p>
+      <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="create">{{ form.non_field_errors }}
+        {% for field in form %}{% if field.name != "capabilities" %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="form-error">{{ error }}</small>{% endfor %}</label>{% endif %}{% endfor %}
+        <fieldset class="permission-fields"><legend>Station capabilities</legend>{% for choice in form.capabilities %}<label>{{ choice.tag }}<span>{{ choice.choice_label }}</span></label>{% endfor %}{% for error in form.capabilities.errors %}<small class="form-error">{{ error }}</small>{% endfor %}</fieldset>
+        <button class="button button-dark form-submit" type="submit">Create station <span aria-hidden="true">↗</span></button>
+      </form>
+      <hr class="management-divider">
+      <details class="form-disclosure" {% if printer_form.errors %}open{% endif %}><summary>Add a printer</summary><p>Optional hardware for stations that use preparation tickets.</p>
+      <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="create_printer">{{ printer_form.non_field_errors }}
+        {% for field in printer_form %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% for error in field.errors %}<small class="form-error">{{ error }}</small>{% endfor %}</label>{% endfor %}
+        <button class="button button-dark form-submit" type="submit">Add printer <span aria-hidden="true">↗</span></button>
+      </form></details>
+    </aside>
+  </div>
+</section>
+{% endblock %}

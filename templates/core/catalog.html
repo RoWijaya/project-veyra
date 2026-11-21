@@ -1,0 +1,44 @@
+{% extends "core/base.html" %}
+{% block title %}Catalog · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span><a href="{% url 'catalog' business.slug %}">Catalog</a>{% if editing %}<span>/</span>{{ editing.name }}{% endif %}</div>
+  <div class="app-heading"><div><h1>Product catalog</h1><p>Manage the products sold at the POS and on the guest menu.</p></div>
+    {% if can_manage and not editing %}<a class="button button-dark" href="#product-form">Add product</a>{% endif %}
+  </div>
+  <nav class="catalog-actions" aria-label="Catalog management">
+    <a class="button button-light" href="{% url 'categories' business.slug %}">Categories</a>
+    {% if can_manage %}<a class="button button-light" href="{% url 'modifier_groups' business.slug %}">Product options</a>
+    <a class="button button-light" href="{% url 'promotions' business.slug %}">Scheduled promotions</a>{% endif %}
+  </nav>
+  <div class="catalog-layout{% if editing %} catalog-editing{% endif %}">
+    {% if can_manage and editing %}{% include "core/catalog_product_form.html" %}{% endif %}
+    <section aria-labelledby="catalog-products-heading">
+      <div class="section-heading"><h2 id="catalog-products-heading">{{ page_obj.paginator.count }} product{{ page_obj.paginator.count|pluralize }}</h2></div>
+      <form method="get" action="{% url 'catalog' business.slug %}" class="list-toolbar catalog-filters">
+        <label class="field"><span>Search products</span><input type="search" name="q" value="{{ search }}" placeholder="Name, category or SKU" maxlength="160"></label>
+        <div class="field"><label for="catalog-category">Category</label><select id="catalog-category" name="category"><option value="">All categories</option>
+          {% for category in categories %}<option value="{{ category.pk }}"{% if category.pk|stringformat:"s" == category_id %} selected{% endif %}>{{ category.name }}</option>{% endfor %}
+          <option value="uncategorized"{% if category_id == "uncategorized" %} selected{% endif %}>Uncategorized</option>
+        </select></div>
+        <button class="button button-light">Filter</button>
+        {% if search or category_id %}<a class="quiet-link" href="{% url 'catalog' business.slug %}">Clear filters</a>{% endif %}
+      </form>
+      <div class="product-list" id="products-list">
+        {% for product in page_obj %}<article class="product-row">
+          <span class="catalog-photo">
+            <span aria-hidden="true">{{ product.name|slice:":1" }}</span>
+            {% if product.image %}<img class="product-thumbnail" src="{% url 'product_image' business.slug product.pk %}" alt="{{ product.image.alt_text }}" width="64" height="64" loading="lazy" data-media-image>{% endif %}
+          </span>
+          <div><strong>{{ product.name }}</strong><small>{{ product.category.name|default:"Uncategorized" }} · {{ product.sku|default:"No SKU" }}</small></div>
+          <div class="product-row-meta"><b>Rp {{ product.price|floatformat:"0g" }}</b><small>{% if product.active %}Available{% else %}Inactive{% endif %}</small>
+            {% if can_manage %}<a class="quiet-link" href="{% url 'product_edit' business.slug product.pk %}#product-form" aria-label="Edit {{ product.name }}">Edit product</a>{% endif %}
+          </div>
+        </article>{% empty %}<p class="inline-empty">{% if search or category_id %}No products match these filters.{% else %}Add your first product to start your catalog.{% endif %}</p>{% endfor %}
+      </div>
+      {% include "core/pagination.html" %}
+    </section>
+    {% if can_manage and not editing %}{% include "core/catalog_product_form.html" %}{% endif %}
+  </div>
+</section>
+{% endblock %}

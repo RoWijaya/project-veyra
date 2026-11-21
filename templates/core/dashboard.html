@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% block title %}Overview · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page dashboard-page">
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }}</p><h1>Business overview</h1><p>Your products, orders and locations at a glance.</p></div>{% if can_create_orders %}<a class="button button-dark" href="{% url 'point_of_sale' business.slug %}">Open POS <span aria-hidden="true">↗</span></a>{% endif %}</div>
+  <div class="metric-grid">{% if can_see_catalog %}<article class="metric"><span>Active products</span><strong>{{ product_count }}</strong><small>Available in your catalog</small></article>{% endif %}{% if can_see_orders %}<article class="metric"><span>Orders to date</span><strong>{{ order_count }}</strong><small>All recorded orders</small></article>{% endif %}{% if can_see_locations %}<article class="metric"><span>Locations</span><strong>{{ locations }}</strong><small>Across this business</small></article>{% endif %}</div>
+  <div class="dashboard-columns">
+    {% if can_see_orders %}<section><div class="section-heading"><h2>Recent orders</h2><a class="quiet-link" href="{% url 'order_history' business.slug %}">View order history</a></div>
+      {% if recent_orders %}<div class="table-scroll" role="region" aria-label="Recent orders" tabindex="0"><table class="data-table"><thead><tr><th scope="col">Time</th><th scope="col">Order</th><th scope="col">Status</th><th scope="col" class="numeric">Total</th></tr></thead><tbody>{% for order in recent_orders %}<tr><td>{{ order.created_at|date:"M j · H:i" }}</td><td><code>{{ order.id|stringformat:"s"|slice:":8" }}</code></td><td><span class="status-badge status-{{ order.status }}">{{ order.get_status_display }}</span></td><td class="numeric">Rp {{ order.total|floatformat:0 }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="inline-empty"><strong>No orders yet</strong><p>Your team's first order will appear here.</p>{% if can_create_orders %}<a href="{% url 'point_of_sale' business.slug %}" class="quiet-link">Create an order</a>{% endif %}</div>{% endif %}
+    </section>{% endif %}
+    <section><div class="section-heading"><h2>Quick links</h2></div><div class="quick-links">
+      {% if can_create_orders or can_see_orders %}<a href="{% url 'point_of_sale' business.slug %}"><span>Orders & POS<small>Create orders and follow their progress</small></span><span aria-hidden="true">↗</span></a>{% endif %}
+      {% if can_see_tables %}<a href="{% url 'tables' business.slug %}"><span>Tables & QR<small>Manage table ordering links</small></span><span aria-hidden="true">↗</span></a>{% endif %}
+      {% if can_see_inventory %}<a href="{% url 'inventory' business.slug %}"><span>Inventory<small>Review balances and stock movements</small></span><span aria-hidden="true">↗</span></a>{% endif %}
+      {% if can_see_reports %}<a href="{% url 'reports' business.slug %}"><span>Sales reports<small>Review paid revenue and product sales</small></span><span aria-hidden="true">↗</span></a>{% endif %}
+      {% if can_see_catalog %}<a href="{% url 'catalog' business.slug %}"><span>Product catalog<small>Find the products your team sells</small></span><span aria-hidden="true">↗</span></a>{% endif %}
+      <a href="{% url 'business_settings' business.slug %}"><span>Settings<small>Manage this business and your account</small></span><span aria-hidden="true">›</span></a>
+    </div></section>
+  </div>
+  {% if is_owner %}<details class="plan-summary"><summary>Your plan: {{ entitlement_state.subscription.plan.name|default:"Not assigned" }}</summary><dl class="plan-facts"><div><dt>Access status</dt><dd>{% if entitlement_state.active %}Available{% else %}Unavailable{% endif %} · {{ entitlement_state.subscription.get_status_display }}</dd></div>{% if entitlement_state.subscription.trial_ends_at %}<div><dt>Trial ends</dt><dd>{{ entitlement_state.subscription.trial_ends_at|date:"M j, Y" }}</dd></div>{% endif %}{% if entitlement_state.subscription.current_period_end %}<div><dt>Current period ends</dt><dd>{{ entitlement_state.subscription.current_period_end|date:"M j, Y" }}</dd></div>{% endif %}</dl></details>{% endif %}
+</section>
+{% endblock %}

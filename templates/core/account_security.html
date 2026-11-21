@@ -1,0 +1,80 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Account security — Veyra{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'core/account.css' %}">{% endblock %}
+{% block public_header %}{% include "core/account_header.html" %}{% endblock %}
+{% block site_footer %}{% include "core/account_footer.html" %}{% endblock %}
+{% block content %}
+<article class="account-security-page" aria-labelledby="security-title">
+  <header class="account-security-heading">
+    <p class="eyebrow">YOUR ACCOUNT</p>
+    <h1 id="security-title">Account security</h1>
+    <p>Manage the ways you sign in to Veyra.</p>
+    <nav aria-label="Security sections"><a class="account-inline-link" href="#authenticator">Authenticator</a><a class="account-inline-link" href="#google">Google account</a></nav>
+  </header>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if recovery_codes %}
+  <section class="recovery-notice" aria-labelledby="recovery-title">
+    <p class="security-status is-enabled" role="status">Authenticator enabled</p>
+    <h2 id="recovery-title">Save your recovery codes</h2>
+    <p>Keep these codes somewhere private. Each works once. They will not be shown again.</p>
+    <ul class="recovery-codes">{% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}</ul>
+    <a class="button button-dark" href="{% url 'workspace_home' %}">Continue to your businesses</a>
+  </section>
+  {% endif %}
+  <section id="authenticator" class="account-method" aria-labelledby="authenticator-title">
+    <header>
+      <h2 id="authenticator-title">Authenticator app</h2>
+      <p class="security-status{% if factor.confirmed %} is-enabled{% endif %}">{% if factor.confirmed %}Enabled{% elif setup_secret %}Setup in progress{% else %}Not enabled{% endif %}</p>
+      <p>{% if factor.confirmed %}Your account requires an authenticator or recovery code when you sign in.{% else %}Use an authenticator app to add a second step to sign-in.{% endif %}</p>
+    </header>
+    <div class="account-method-content">
+      {% if setup_secret %}
+        <div class="authenticator-steps">
+          <section aria-labelledby="scan-code-title">
+            <h3 id="scan-code-title">1. Add Veyra to your app</h3>
+            <p>Scan this QR code with your authenticator app.</p>
+            <img class="authenticator-qr" src="{% url 'authenticator_qr' %}" alt="Authenticator setup QR code" width="200" height="200">
+            <details class="account-help"><summary>Enter a setup key instead</summary><code class="setup-secret">{{ setup_secret }}</code></details>
+          </section>
+          <section aria-labelledby="confirm-code-title">
+            <h3 id="confirm-code-title">2. Confirm the code</h3>
+            <p>Enter the current six-digit code to finish setup.</p>
+            <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="confirm">
+              <div class="field"><label for="enrollment-code">Authenticator code</label><input id="enrollment-code" class="account-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></div>
+              <button class="button button-dark" type="submit">Verify and enable</button>
+            </form>
+          </section>
+        </div>
+      {% elif factor.confirmed %}
+        <details class="account-help"><summary>Remove or replace authenticator</summary>
+          <p>Confirm your password and a fresh authenticator or unused recovery code. Some roles require you to set up a new authenticator after removal.</p>
+          <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="disable">
+            {% if request.user.has_usable_password %}<div class="field"><label for="remove-password">Current password</label><input id="remove-password" type="password" name="password" autocomplete="current-password" required></div>{% endif %}
+            <div class="field"><label for="remove-code">Authenticator or recovery code</label><input id="remove-code" class="account-code" name="code" autocomplete="one-time-code" required></div>
+            <button class="button button-light button-danger" type="submit">Remove authenticator</button>
+          </form>
+        </details>
+      {% else %}
+        <form method="post" class="form-stack">{% csrf_token %}<input type="hidden" name="action" value="begin">
+          {% if request.user.has_usable_password %}<div class="field"><label for="setup-password">Current password</label><input id="setup-password" type="password" name="password" autocomplete="current-password" required></div>
+          {% else %}<p>Sign in with Google again if your last sign-in was more than five minutes ago.</p>{% endif %}
+          <button class="button button-dark" type="submit">Set up authenticator</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+  <section id="google" class="account-method" aria-labelledby="google-title">
+    <header><h2 id="google-title">Google account</h2><p class="security-status{% if google_connected %} is-enabled{% endif %}">{% if google_connected %}Connected{% else %}Not connected{% endif %}</p></header>
+    <div class="account-method-content">
+      {% if google_connected %}<p>Use your connected Google identity to sign in. Your authenticator still protects your Veyra account.</p>
+      {% elif google_available %}<p>Confirm your Veyra account to connect Google.</p>
+        <form method="post" action="{% url 'google_start' %}" class="form-stack">{% csrf_token %}<input type="hidden" name="intent" value="link">
+          {% if request.user.has_usable_password %}<div class="field"><label for="google-password">Current password</label><input id="google-password" type="password" name="password" autocomplete="current-password" required></div>{% endif %}
+          <button class="button button-light" type="submit">Connect Google</button>
+        </form>
+      {% else %}<p>Google sign-in is not configured on this installation. You can continue using your current sign-in method.</p>{% endif %}
+    </div>
+  </section>
+</article>
+{% endblock %}

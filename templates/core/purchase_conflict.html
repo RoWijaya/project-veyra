@@ -1,0 +1,4 @@
+{% extends "core/base.html" %}
+{% block title %}Purchase already updated · Veyra{% endblock %}
+{% block content %}<section class="app-page"><h1>Purchase already updated</h1><p>This purchase is {{ purchase.get_status_display|lower }}.</p>
+<a class="button button-light" href="{% url 'purchase_detail' business.slug purchase.pk %}">Back to purchase</a></section>{% endblock %}

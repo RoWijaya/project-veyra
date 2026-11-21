@@ -1,0 +1,25 @@
+{% extends "core/base.html" %}
+{% block title %}Order {{ order.pk|slice:":8" }} — {{ order.business.name }}{% endblock %}
+{% block content %}
+<section class="app-page guest-order" data-order-tracking data-order-id="{{ order.pk }}" data-fulfillment="{{ order.order_type }}" data-pickup-location="{{ order.location.name }}" data-order-status="{{ order.get_status_display }}" data-payment-status="{{ order.get_payment_status_display }}">
+  <p class="eyebrow">{{ order.business.name|upper }}{% if order.location %} / {{ order.location.name|upper }}{% endif %}</p>
+  <div class="app-heading"><div><p class="eyebrow">ORDER {{ order.pk|slice:":8" }}</p><h1>Your order</h1><p data-tracking-help>{% if order.status == "completed" %}Your order is complete. Thank you for ordering.{% elif order.status == "cancelled" %}This order was cancelled. Please ask the team if you need help.{% elif order.status == "ready" %}{% if order.order_type == "takeaway" %}Your order is ready to collect{% if order.location %} at {{ order.location.name }}{% endif %}.{% else %}Your order is ready. The team will help with service.{% endif %}{% elif order.status == "preparing" %}The team is preparing your order.{% else %}Your order has been received. Status updates will appear here automatically.{% endif %}</p></div></div>
+  <div class="guest-order-card" aria-live="polite">
+    <p class="tracking-connection" data-order-connection role="status">Connecting to live updates…</p>
+    <p>{{ order.get_order_type_display }}{% if order.table_label %} · {{ order.table_label }}{% endif %}</p>
+    <h2>Order status</h2><p><strong data-order-status>{{ order.get_status_display }}</strong></p>
+    <h2>Payment</h2><p><strong data-payment-status>{{ order.get_payment_status_display }}</strong> · <span data-payment-method>{{ order.get_payment_method_display }}</span></p>
+    <div data-guest-payment-pending{% if order.payment_status != "pending" %} hidden{% endif %}>
+      {% if order.payment_status == "pending" %}
+      {% if payment and payment.qr_payload %}<img class="payment-qr" src="{% url 'guest_order_payment_qr' order.pk %}" alt="QRIS payment code" width="240" height="240">{% endif %}
+      {% if payment.expires_at %}<p>QRIS expires {{ payment.expires_at|date:"H:i" }}.</p>{% endif %}
+      {% endif %}
+    </div>
+    {% if order.payment_method == "qris" and order.payment_status != "paid" %}<form method="post" data-guest-payment-retry{% if order.payment_status == "pending" or order.status == "cancelled" or order.status == "completed" %} hidden{% endif %}>{% csrf_token %}<button class="button button-dark">Try QRIS again</button></form>{% endif %}
+    <h2>Order summary</h2>
+    <ul>{% for line in order.lines.all %}<li>{{ line.quantity }} × {{ line.product_name }} — Rp {{ line.line_total|floatformat:0 }}{% if line.modifiers %}<ul>{% for option in line.modifiers %}<li>{{ option.group }} · {{ option.name }}</li>{% endfor %}</ul>{% endif %}</li>{% endfor %}</ul>
+    {% if order.voucher_snapshot %}<p>Voucher · {{ order.voucher_snapshot.code }} · −Rp {{ order.voucher_discount|floatformat:"-2" }}</p>{% endif %}
+    <p><strong>Total · Rp {{ order.total|floatformat:"-2" }}</strong></p>
+  </div>
+</section>
+{% endblock %}

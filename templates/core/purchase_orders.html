@@ -1,0 +1,19 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Purchase orders · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page" data-purchase-stream="{{ business.slug }}">
+  <div class="crumb"><a href="{% url 'inventory' business.slug %}">Inventory</a><span>/</span>Purchase orders</div>
+  <div class="app-heading"><div><h1>Purchase orders</h1><p>Order stock and track deliveries by location.</p></div>
+  {% if can_manage %}<a class="button button-dark" href="{% url 'purchase_create' business.slug %}">New purchase order</a>{% endif %}</div>
+  <section class="form-card">
+    <form method="get" class="report-filters">
+      {% for field in filter_form %}{% include "core/purchasing_field.html" %}{% endfor %}
+      <div class="management-actions"><button class="button button-light">Filter orders</button>{% if request.GET %}<a class="button button-light" href="{% url 'purchases' business.slug %}">Clear filters</a>{% endif %}</div>
+    </form>
+    <p data-purchase-connection class="field-hint" role="status">Connecting to live purchases…</p>
+    <div data-purchase-refresh>{% include "core/purchase_rows.html" %}</div>
+  </section>
+</section>
+<script src="{% static 'core/purchasing.js' %}" defer></script>
+{% endblock %}

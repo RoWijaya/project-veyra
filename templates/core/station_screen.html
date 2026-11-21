@@ -1,0 +1,30 @@
+{% extends "core/base.html" %}
+{% block title %}{{ station.name }} · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page station-screen" data-station-screen="{{ business.slug }}" data-station-id="{{ station.pk }}">
+  <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>{% if business.owner_id == request.user.pk %}<a href="{% url 'stations' business.slug %}">Stations</a><span>/</span>{% endif %}{{ station.name }}</div>
+  <div class="app-heading"><div><p class="eyebrow">{{ business.name|upper }} / {{ station.get_kind_display|upper }}</p><h1>{{ station.name }}</h1><p>{{ station.get_handling_mode_display }}{% if station.location %} · {{ station.location.name }}{% endif %}{% if station.printer %} · {{ station.printer.name }} ({{ station.printer.get_status_display }}){% endif %}</p></div>{% if business.owner_id == request.user.pk %}<a class="button button-light" href="{% url 'stations' business.slug %}">Manage stations</a>{% endif %}</div>
+  <p data-station-connection role="status" aria-live="polite">Connecting to live orders…</p>
+  
+  <div id="station-queue" data-station-queue>
+    <div class="section-heading"><div><p class="eyebrow">PREPARATION QUEUE</p><h2>{{ orders|length }} active orders</h2></div></div>
+    <div class="station-grid">
+      {% for order in orders %}
+      <article class="station-ticket" data-order-id="{{ order.pk }}">
+        <div class="ticket-heading"><strong>#{{ order.pk|stringformat:"s"|slice:":6"|upper }}</strong><span class="status-badge status-{{ order.status }}" data-status>{{ order.get_status_display }}</span></div>
+        <p class="ticket-meta">{{ order.get_order_type_display }}{% if order.table_label %} · {{ order.table_label }}{% endif %} · <time datetime="{{ order.created_at|date:'c' }}">{{ order.created_at|date:"H:i" }}</time>{% if order.customer_name_snapshot %} · {{ order.customer_name_snapshot }}{% endif %}</p>
+        <ul class="ticket-items">{% for line in order.lines.all %}<li><strong>{{ line.quantity }} ×</strong> {{ line.product_name }}{% if line.modifiers %}<ul class="modifier-summary">{% for option in line.modifiers %}<li>{{ option.group }} · {{ option.name }}</li>{% endfor %}</ul>{% endif %}</li>{% endfor %}</ul>
+        {% if order.note %}<p class="ticket-note"><strong>Instructions:</strong> {{ order.note }}</p>{% endif %}
+        {% if can_manage_orders %}<div class="ticket-actions">
+          {% if order.status == 'new' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="preparing"><button class="button button-dark" type="submit">Start preparation</button></form>
+          {% elif order.status == 'preparing' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="ready"><button class="button button-dark" type="submit">Mark ready</button></form>
+          {% elif order.status == 'ready' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="completed"><button class="button button-dark" type="submit">Complete order</button></form>{% endif %}
+          <form method="post">{% csrf_token %}<input type="hidden" name="action" value="reprint"><input type="hidden" name="order_id" value="{{ order.pk }}"><button class="button button-light" type="submit" aria-label="Reprint preparation ticket for order {{ order.pk|stringformat:'s'|slice:':6' }}">Reprint ticket</button></form>
+        </div>{% endif %}
+      </article>
+      {% empty %}<div class="inline-empty"><strong>No active orders for this station.</strong><p>New orders appear here as they reach this preparation queue.</p></div>{% endfor %}
+    </div>
+    {% if print_jobs %}<section class="station-print-jobs"><div class="section-heading"><div><p class="eyebrow">PRINT DISPATCH</p><h2>Recent print jobs</h2></div></div><div class="table-scroll" tabindex="0" role="region" aria-label="Recent print jobs"><table class="data-table"><caption class="sr-only">Recent print jobs for {{ station.name }}</caption><thead><tr><th scope="col">Job</th><th scope="col">Type</th><th scope="col">Order</th><th scope="col">Status</th><th scope="col">Queued</th><th scope="col">Printed</th></tr></thead><tbody>{% for job in print_jobs %}<tr><td><code>{{ job.pk|stringformat:"s"|slice:":8" }}</code></td><td>{{ job.get_job_type_display }}</td><td>#{{ job.order_id|stringformat:"s"|slice:":6"|upper }}</td><td><span class="status-badge status-{{ job.status }}">{{ job.get_status_display }}</span></td><td>{{ job.created_at|date:"H:i:s" }}</td><td>{{ job.printed_at|date:"H:i:s"|default:"Not printed" }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
+  </div>
+</section>
+{% endblock %}

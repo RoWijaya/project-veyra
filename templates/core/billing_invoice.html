@@ -1,0 +1,32 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Invoice {{ invoice.reference }} · Veyra{% endblock %}
+{% block content %}
+<section class="app-page" data-billing-stream="{{ business.slug }}">
+  <div class="crumb"><a href="{% url 'subscription_billing' business.slug %}">Subscription &amp; billing</a><span>/</span>{{ invoice.reference }}</div>
+  <div class="app-heading"><div><h1>Invoice {{ invoice.reference }}</h1><p>{{ business.name }} · {{ invoice.terms.name }}</p></div></div>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <p data-billing-connection class="sr-only" role="status"></p>
+  <section class="form-card" data-billing-state>
+    <div class="billing-heading"><h2>Rp {{ invoice.total|floatformat:"0g" }}</h2><span class="status-badge" data-invoice-status>{{ invoice.get_status_display }}</span></div>
+    <dl class="plan-facts">
+      <div><dt>Billing period</dt><dd>{{ invoice.period_start|date:"d M Y" }} – {{ invoice.period_end|date:"d M Y" }}</dd></div>
+      <div><dt>Issued</dt><dd>{{ invoice.issued_at|date:"d M Y" }}</dd></div>
+      <div><dt>Due</dt><dd>{{ invoice.due_at|date:"d M Y" }}</dd></div>
+      {% if invoice.paid_at %}<div><dt>Paid</dt><dd>{{ invoice.paid_at|date:"d M Y H:i T" }}</dd></div>{% endif %}
+    </dl>
+    {% if attempt and invoice.status != 'paid' %}<p role="status">{{ attempt.get_status_display }}{% if attempt.status == 'failed' %}. Start a new checkout to try again.{% endif %}</p>{% endif %}
+    {% if payable and gateway %}
+      <form method="post" class="management-actions">{% csrf_token %}
+        <button class="button button-dark" name="action" value="checkout">{% if attempt.status == 'pending' %}Continue checkout{% elif attempt.status == 'failed' %}Retry payment{% else %}Pay invoice{% endif %}</button>
+        {% if attempt.status == 'pending' %}<button class="button button-light" name="action" value="check">Check payment status</button>{% endif %}
+      </form>
+    {% elif payable %}<p>Platform checkout is currently unavailable. This invoice stays open for payment.</p>
+    {% elif invoice.status == 'open' %}
+      {% if invoice.subscription.status == 'suspended' %}<p>Contact platform support to restore checkout.</p>
+      {% else %}<p>This invoice is no longer available for checkout. Return to Billing for recovery options.</p>{% endif %}
+    {% endif %}
+  </section>
+</section>
+<script src="{% static 'core/billing.js' %}" defer></script>
+{% endblock %}

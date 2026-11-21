@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}{% if purchase %}Edit {{ purchase.reference }}{% else %}New purchase order{% endif %} · Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'purchases' business.slug %}">Purchase orders</a><span>/</span>{% if purchase %}{{ purchase.reference }}{% else %}New purchase{% endif %}</div>
+  <div class="app-heading"><div><h1>{% if purchase %}Edit purchase draft{% else %}New purchase order{% endif %}</h1><p>Save a draft to review prices and totals before marking the purchase as ordered.</p></div></div>
+  <form method="post" class="form-stack" data-purchase-editor>
+    {% csrf_token %}{{ header.revision }}{{ items.management_form }}
+    {{ header.non_field_errors }}{{ items.non_form_errors }}
+    <section class="form-card">
+      <h2>Delivery details</h2><div class="purchase-fields">
+      {% for field in header.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
+      </div>
+      {% if not header.fields.supplier.queryset.exists %}<p class="field-hint"><a href="{% url 'supplier_create' business.slug %}">Add an active supplier</a> to start an order.</p>{% endif %}
+    </section>
+    <section class="form-card">
+      <h2>Items to order</h2>
+      {% for row in items %}{% include "core/purchase_item_fields.html" %}{% endfor %}
+      <template data-empty-purchase-line>{% include "core/purchase_item_fields.html" with row=items.empty_form %}</template>
+      <button type="button" class="button button-light" data-add-purchase-line hidden>Add item</button>
+      <noscript><p class="field-hint">Save the draft and reopen it to add another item.</p></noscript>
+    </section>
+    <div class="management-actions"><button class="button button-dark">Save draft</button>
+      {% if purchase %}<a class="button button-light" href="{% url 'purchase_detail' business.slug purchase.pk %}">Back to purchase</a>{% endif %}</div>
+  </form>
+</section>
+<script src="{% static 'core/purchasing.js' %}" defer></script>
+{% endblock %}

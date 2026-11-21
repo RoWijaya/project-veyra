@@ -1,0 +1,15 @@
+.env
+.venv/
+.venv315/
+__pycache__/
+*.py[cod]
+*.sqlite3
+staticfiles/
+media/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+.scratch/
+.scratch-*.log
+.caveman
