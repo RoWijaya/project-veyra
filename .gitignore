@@ -1,0 +1,51 @@
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local databases
+*.sqlite3
+*.db
+
+# User uploaded files
+media/
+uploads/
+
+# Generated Django files
+staticfiles/
+
+# Logs
+*.log
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE and editor settings
+.idea/
+.vscode/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Node dependencies and generated builds
+node_modules/
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.bak
