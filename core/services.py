@@ -36,6 +36,7 @@ from .models import (
     OutboxEvent,
     PairedDevice,
     PaymentConnection,
+    PaymentSigningVersion,
     PaymentTransaction,
     PaymentWebhookEvent,
     Printer,
@@ -52,6 +53,7 @@ from .models import (
 from .modifiers import normalize_options
 from .observability import logger
 from .payments import get_payment_adapter
+from .payments.midtrans import notification_credentials
 from .permissions import STATION_CAPABILITIES, order_tracking_group_name
 from .pricing import (
     calculate_voucher, normalize_voucher_code, pos_voucher_approval, price_order_items,
@@ -59,19 +61,31 @@ from .pricing import (
 )
 
 
+MAX_OUTBOX_ATTEMPTS = 12
+
+
 def dispatch_outbox_event(event_id):
     now = timezone.now()
     with transaction.atomic():
         event = (
             OutboxEvent.objects.select_for_update()
-            .filter(pk=event_id, published_at__isnull=True, next_attempt_at__lte=now)
+            .filter(pk=event_id, published_at__isnull=True, failed_at__isnull=True, next_attempt_at__lte=now)
             .first()
         )
         if event is None:
             return False
+        if event.attempts >= MAX_OUTBOX_ATTEMPTS:
+            event.failed_at = now
+            event.last_error = "LeaseExpired"
+            event.save(update_fields=["failed_at", "last_error"])
+            return False
         event.attempts += 1
         event.next_attempt_at = now + timedelta(seconds=30)
         event.save(update_fields=["attempts", "next_attempt_at"])
+    claimed = OutboxEvent.objects.filter(
+        pk=event.pk, attempts=event.attempts, next_attempt_at=event.next_attempt_at,
+        published_at__isnull=True, failed_at__isnull=True,
+    )
     try:
         from channels.layers import get_channel_layer
 
@@ -79,7 +93,7 @@ def dispatch_outbox_event(event_id):
             layer = get_channel_layer()
             if layer is None:
                 raise RuntimeError("No channel layer is configured")
-            message = {"type": event.event_type, "event_id": str(event.pk), **event.payload}
+            message = {**event.payload, "type": event.event_type, "event_id": str(event.pk)}
             if event.event_type == "menu.update":
                 await layer.group_send(f"guest_menu_{event.business_id.hex}", message)
                 if "modifier_group" in event.payload or "voucher" in event.payload or event.payload.get("catalog_changed"):
@@ -105,19 +119,18 @@ def dispatch_outbox_event(event_id):
             asyncio.run(publish())
     except Exception as error:
         retry_delay = min(5 * 2 ** min(event.attempts - 1, 6), 300)
-        OutboxEvent.objects.filter(pk=event.pk, published_at__isnull=True).update(
-            next_attempt_at=timezone.now() + timedelta(seconds=retry_delay),
+        failed_at = timezone.now()
+        claimed.update(
+            next_attempt_at=failed_at + timedelta(seconds=retry_delay),
             last_error=type(error).__name__,
+            failed_at=failed_at if event.attempts >= MAX_OUTBOX_ATTEMPTS else None,
         )
         logger.error("Outbox delivery failed", extra={
             "event": "outbox.delivery_failed", "event_id": str(event.pk),
             "attempts": event.attempts,
         }, exc_info=True)
         return False
-    OutboxEvent.objects.filter(pk=event.pk, published_at__isnull=True).update(
-        published_at=timezone.now(), last_error=""
-    )
-    return True
+    return bool(claimed.update(published_at=timezone.now(), last_error=""))
 
 
 def queue_promotion_boundary_events(*, at=None):
@@ -697,6 +710,16 @@ def save_payment_connection(*, business, actor, provider, environment, merchant_
             previous.environment != environment or previous.merchant_id != merchant_id
         ):
             raise ValueError("This merchant and environment are linked to payment history.")
+        if previous and provider == PaymentConnection.Provider.MIDTRANS:
+            unbound = previous.transactions.filter(signing_version__isnull=True)
+            if unbound.exists():
+                old = notification_credentials(previous, read_payment_credentials(connection=previous, actor=actor))
+                if old and old != notification_credentials(previous, credentials):
+                    version = PaymentSigningVersion.objects.create(
+                        connection=previous, ciphertext=_payment_fernet().encrypt(json.dumps(old).encode()).decode(),
+                        valid_until=timezone.now() + timedelta(days=30),
+                    )
+                    unbound.update(signing_version=version)
         connection, _ = PaymentConnection.objects.update_or_create(
             business=business,
             provider=provider,
@@ -1642,7 +1665,9 @@ def verify_payment_connection(*, business, connection_id, actor, reference=""):
         if connection.provider == PaymentConnection.Provider.BCA_QRIS:
             state = states.EXTERNAL
             message = "BCA approval and a supported SNAP verification contract are required. No connection has been verified."
-        elif not credentials.get("signature_secret_key", "").strip():
+        elif not credentials.get("signature_secret_key", "").strip() or (
+            credentials["signature_secret_key"].strip() == credentials["server_key"].strip()
+        ):
             message = "Enter the Midtrans Signature Secret Key from the merchant dashboard."
         elif not reference or len(reference) > 120 or not reference.isascii() or not reference.isprintable():
             message = "Enter an existing QRIS order or transaction ID from this merchant and environment."
@@ -1740,8 +1765,8 @@ def initiate_qris_payment(
                 connection = attempt.connection
             else:
                 try:
-                    connection = PaymentConnection.objects.select_for_update().get(
-                        business=business, provider=provider, verified_at__isnull=False,
+                    connection = PaymentConnection.objects.ready().select_for_update().get(
+                        business=business, provider=provider,
                     )
                 except PaymentConnection.DoesNotExist as error:
                     raise ValueError("A verified QRIS connection is required") from error
@@ -1923,7 +1948,7 @@ def process_payment_webhook(*, provider, headers, raw_body):
     provider_id, merchant_ref, amount, status = adapter.parse_webhook_status(payload)
     if not all(isinstance(value, str) and len(value) <= 120 for value in (provider_id, merchant_ref)):
         raise ValueError("Invalid payment transaction reference.")
-    matches = PaymentTransaction.objects.select_related("connection").filter(
+    matches = PaymentTransaction.objects.select_related("connection", "signing_version").filter(
         provider=provider, connection__provider=provider, connection__business_id=models.F("business_id"),
         order__business_id=models.F("business_id"), connection__environment=models.F("environment"),
     )
@@ -1942,6 +1967,14 @@ def process_payment_webhook(*, provider, headers, raw_body):
     valid, _ = adapter.verify_webhook_signature(
         connection=connection, credentials=credentials, payload=payload, headers=headers, raw_body=body_bytes,
     )
+    version = tx.signing_version
+    if not valid and provider == PaymentConnection.Provider.MIDTRANS and version and version.connection_id == connection.pk and (
+        not version.revoked_at and version.ciphertext and version.valid_until > timezone.now()
+    ):
+        retained = json.loads(_payment_fernet().decrypt(version.ciphertext.encode()))
+        valid, _ = adapter.verify_webhook_signature(
+            connection=connection, credentials=retained, payload=payload, headers=headers, raw_body=body_bytes,
+        )
     evidence = {"transaction_id": tx.provider_transaction_id, "merchant_reference": tx.merchant_reference, "status": status}
     if not valid:
         invalid_digest = hashlib.sha256(f"rejected:{digest}".encode()).hexdigest()

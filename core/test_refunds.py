@@ -39,9 +39,10 @@ class RefundFixture:
 
     def midtrans_capture(self):
         self.server_key = "SB-Mid-server-LOCAL-REFUND-FIXTURE"
+        self.signing_key = "refund-notification-secret"
         connection = save_payment_connection(
             business=self.business, actor=self.owner, provider="midtrans", environment="sandbox",
-            merchant_id="local-fixture", credentials={"server_key": self.server_key},
+            merchant_id="local-fixture", credentials={"server_key": self.server_key, "signature_secret_key": self.signing_key},
         )
         self.order.payment_method = Order.PaymentMethod.QRIS
         self.order.payment_status = Order.PaymentStatus.PAID
@@ -112,7 +113,7 @@ class RefundTests(RefundFixture, TestCase):
         }
         payload = self.provider_data(payment, "partial_refund", refunds=[provider_refund])
         payload["signature_key"] = hashlib.sha512(
-            f"{payload['order_id']}200{payload['gross_amount']}{self.server_key}".encode(),
+            f"{payload['order_id']}200{payload['gross_amount']}{self.signing_key}".encode(),
         ).hexdigest()
         status.return_value = payload
         webhook = reverse("payment_webhook", args=["midtrans"])
@@ -169,7 +170,7 @@ class RefundTests(RefundFixture, TestCase):
         payment = self.midtrans_capture()
         payload = self.provider_data(payment, "expire")
         payload["signature_key"] = hashlib.sha512(
-            f"{payload['order_id']}200{payload['gross_amount']}{self.server_key}".encode(),
+            f"{payload['order_id']}200{payload['gross_amount']}{self.signing_key}".encode(),
         ).hexdigest()
         status.return_value = payload
         webhook = reverse("payment_webhook", args=["midtrans"])

@@ -85,7 +85,7 @@ from .models import (
 )
 from .modifiers import modifier_catalog, submitted_options
 from .page_errors import access_restricted
-from .account_mail import VERIFICATION_TTL, deliver_in_memory, queue_verification, send_account_email
+from .account_mail import VERIFICATION_TTL, VerificationDelivery, deliver_in_memory, queue_verification, send_account_email
 from .permissions import (
     ORDER_TRACKING_MAX_AGE,
     order_for_tracking_cookie,
@@ -268,10 +268,17 @@ def register(request):
 def verify_email(request, uidb64, token):
     try:
         uid = force_str(urlsafe_base64_decode(uidb64))
-        user_id = signing.loads(token, salt="veyra-email-verification", max_age=VERIFICATION_TTL)
+        claim = signing.loads(token, salt="veyra-email-verification", max_age=VERIFICATION_TTL)
+        user_id, generation = claim if isinstance(claim, list) else (claim, None)
         if str(user_id) != uid:
             raise signing.BadSignature
         user = get_object_or_404(User.objects.select_for_update(), pk=uid, email_verified_at__isnull=True, is_active=False)
+        delivery = VerificationDelivery.objects.filter(user=user).first()
+        if generation is None:
+            if delivery and not delivery.accept_legacy_token:
+                raise signing.BadSignature
+        elif not delivery or generation != str(delivery.generation):
+            raise signing.BadSignature
     except (ValueError, TypeError, signing.BadSignature, Http404):
         return render(request, "core/verify.html", {"valid": False}, status=400)
     started_here = request.session.get("pending_verification_user") == user.pk
@@ -866,7 +873,7 @@ def table_order(request, token):
         business=table.business, products=products, location=table.location
     )
     products = visible_products(products, settings_for(published_design(table.business)))
-    providers = table.business.payment_connections.filter(verified_at__isnull=False).order_by("provider")
+    providers = table.business.payment_connections.ready().order_by("provider")
     error = None
     if not subscription_allows_orders:
         error = "Ordering is temporarily unavailable for this business."

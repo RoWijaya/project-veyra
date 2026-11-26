@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Exists, OuterRef, Q, Sum
 from django.http import Http404
 
-from .models import Business, Membership, Order, OrderRefund, PairedDevice, PaymentTransaction
+from .models import Business, InventoryBalance, Membership, Order, OrderRefund, PairedDevice, PaymentTransaction
 from .storefront import resolve_storefront
 
 ORDER_TRACKING_MAX_AGE = 60 * 60 * 24
@@ -146,6 +146,23 @@ def inventory_stream_business_id(user_id, slug, location_id=None):
     ):
         return member.business_id.hex
     return None
+
+
+def inventory_stream_snapshot(user_id, slug, item_id, location_id):
+    member = stream_access(user_id, slug, "inventory.view")
+    if not member or not all(valid_location_key(value) for value in (item_id, location_id)):
+        return None
+    balance = InventoryBalance.objects.filter(
+        item_id=item_id, item__business_id=member.business_id,
+        location_id=location_id, location__in=member.allowed_locations(),
+    ).first()
+    if balance is None:
+        return None
+    return {
+        "quantity": str(balance.quantity),
+        "last_purchase_unit_cost": str(balance.last_purchase_unit_cost) if balance.last_purchase_unit_cost is not None else None,
+        "current_cost_estimate": str(balance.current_cost_estimate) if balance.last_purchase_unit_cost is not None else None,
+    }
 
 
 def device_stream_business_id(station_id, token_digest):

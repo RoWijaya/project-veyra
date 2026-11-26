@@ -245,12 +245,15 @@ class VoucherWorkflowTests(VoucherFixture, TestCase):
     @patch("urllib.request.urlopen")
     def test_voucher_stays_committed_across_qris_failure_expiry_and_settlement(self, provider_request):
         key = "SB-Mid-server-TESTVOUCHER123456"
+        signing_key = "voucher-notification-signature"
         connection = save_payment_connection(
             business=self.business, actor=self.owner, provider="midtrans", environment="sandbox",
-            merchant_id="VOUCHER-QA", credentials={"server_key": key},
+            merchant_id="VOUCHER-QA", credentials={"server_key": key, "signature_secret_key": signing_key},
         )
         connection.verified_at = timezone.now()
-        connection.save(update_fields=["verified_at"])
+        connection.verification_state = "verified"
+        connection.approval_reference = "test-approval"
+        connection.save(update_fields=["verified_at", "verification_state", "approval_reference"])
         self.create_voucher(redemption_limit="3")
         for index, (provider_status, order_status) in enumerate(
             [("deny", "failed"), ("expire", "expired"), ("settlement", "paid")]
@@ -272,7 +275,7 @@ class VoucherWorkflowTests(VoucherFixture, TestCase):
             order = tracking.context["order"]
             payment = tracking.context["payment"]
             self.assertEqual(payment.amount, Decimal("27500.00"))
-            signature = hashlib.sha512(f"{payment.merchant_reference}20027500{key}".encode()).hexdigest()
+            signature = hashlib.sha512(f"{payment.merchant_reference}20027500{signing_key}".encode()).hexdigest()
             notification = {
                 "order_id": payment.merchant_reference, "status_code": "200", "gross_amount": "27500",
                 "transaction_status": provider_status, "fraud_status": "accept",

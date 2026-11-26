@@ -17,6 +17,9 @@ os.environ["DJANGO_SQLITE_TEST"] = "0"
 os.environ["SUPABASE_MEDIA_URL"] = ""
 os.environ["SUPABASE_MEDIA_BUCKET"] = ""
 os.environ["SUPABASE_SERVICE_ROLE_KEY"] = ""
+os.environ["RESEND_API_KEY"] = ""
+os.environ["VEYRA_BILLING_MIDTRANS_SERVER_KEY"] = ""
+os.environ["VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY"] = ""
 
 import django
 
@@ -91,6 +94,7 @@ try:
     for name, command in (
         ("server", ["-m", "uvicorn", "config.asgi:application", "--host", "127.0.0.1", "--port", "8112", "--no-access-log", "--log-level", "warning"]),
         ("outbox", ["manage.py", "process_outbox", "--interval", "0.5"]),
+        ("account-mail", ["manage.py", "process_account_mail", "--interval", "0.5"]),
     ):
         with (directory / f"{name}.log").open("w", encoding="utf8") as output:
             children.append(subprocess.Popen([sys.executable, *command], env=environment,

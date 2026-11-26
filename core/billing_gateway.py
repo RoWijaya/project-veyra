@@ -7,6 +7,7 @@ import requests
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from .billing import apply_paid_invoice, billing_event, lock_subscription
 from .models import BillingAttempt, BillingInvoice, BusinessSubscription
@@ -22,8 +23,35 @@ class BillingGatewayError(ValueError):
     pass
 
 
+def platform_api_available():
+    return bool(settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY.strip()
+                and settings.VEYRA_BILLING_MIDTRANS_ENV in {"sandbox", "production"})
+
+
+def configured_time(value):
+    try:
+        parsed = parse_datetime(value)
+    except ValueError:
+        return None
+    return parsed if parsed and timezone.is_aware(parsed) else None
+
+
 def gateway_available():
-    return bool(settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY and settings.VEYRA_BILLING_MIDTRANS_ENV in {"sandbox", "production"})
+    approval = settings.VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE
+    approved = configured_time(settings.VEYRA_BILLING_MIDTRANS_APPROVED_AT)
+    secret = settings.VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY.strip()
+    api_key = settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY.strip()
+    try:
+        origin = urlsplit(settings.VEYRA_BILLING_PUBLIC_ORIGIN)
+    except ValueError:
+        return False
+    return bool(
+        platform_api_available() and secret and secret != api_key
+        and approval and len(approval) <= 120 and approval.isascii() and approval.isprintable()
+        and approved and approved <= timezone.now()
+        and origin.scheme == "https" and origin.hostname and not origin.username
+        and not origin.password and not (origin.path or origin.query or origin.fragment)
+    )
 
 
 def provider_host(service):
@@ -32,7 +60,7 @@ def provider_host(service):
 
 
 def midtrans_request(method, url, **options):
-    if not gateway_available():
+    if not platform_api_available() or (method != "GET" and not gateway_available()):
         raise BillingGatewayError("Platform checkout is unavailable.")
     try:
         response = requests.request(
@@ -112,16 +140,32 @@ def request_hosted_url(attempt, return_url):
 
 
 def notification_attempt(payload):
-    if not gateway_available() or not isinstance(payload, dict):
+    if not platform_api_available() or not isinstance(payload, dict):
         raise PermissionError
-    secret = settings.VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY or settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY
-    if not valid_notification_signature(payload, secret):
+    secret = settings.VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY.strip()
+    api_key = settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY.strip()
+    if secret == api_key:
+        raise PermissionError
+    if not secret and settings.VEYRA_BILLING_MIDTRANS_ALLOW_LEGACY_SIGNATURE:
+        secret = api_key
+    current = valid_notification_signature(payload, secret)
+    cutover = configured_time(settings.VEYRA_BILLING_MIDTRANS_ROTATED_AT)
+    expires = configured_time(settings.VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_UNTIL)
+    now = timezone.now()
+    previous = bool(
+        secret and cutover and expires and cutover <= now < expires <= cutover + timedelta(days=30)
+        and valid_notification_signature(payload, settings.VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_SECRET_KEY.strip())
+    )
+    if not current and not previous:
         logger.warning("Rejected platform payment signature", extra={"event": "billing.signature_rejected"})
         raise PermissionError
     reference = payload["order_id"]
     if not reference.startswith("VB-") or len(reference) != 35:
         raise ValueError("Unknown invoice payment.")
-    return UUID(hex=reference[3:])
+    attempt_id = UUID(hex=reference[3:])
+    if not current and not BillingAttempt.objects.filter(pk=attempt_id, created_at__lt=cutover).exists():
+        raise PermissionError
+    return attempt_id
 
 
 def verified_provider_status(attempt):

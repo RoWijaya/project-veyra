@@ -147,3 +147,20 @@ Compared with the intake working tree on `update`, which had 156 existing change
 - `core/workers.py`
 - `tests/browser/priority-workflows.cjs`
 - `tests/recovery/staging_fixture.py`
+
+
+## Stage 1 release candidate
+
+The final run at baseline 5dec2ca with the uncommitted Stage 1 changes passed **271 tests in 170.115 seconds**, with zero failures and zero skips. The run used PostgreSQL 17.12, Redis 7.4.12, Python 3.14.7 and Django 6.1.3 on an isolated test database. External socket connections were fenced and provider boundaries were controlled in tests. Django system checks, migration consistency, JavaScript syntax and the applicable staging dependency checks passed.
+
+| Verification | Observed result |
+| --- | --- |
+| Authorization | PostgreSQL and real Channels/Redis tests exercised branch filtering, permission and membership revocation, reconnect denial, independent users and order/stock stream isolation. A stale inventory event displayed the current authorized balance. |
+| Payment | Wrong and missing keys, explicit legacy gating, replaced tenant credentials, revoked historical keys, prior platform attempts versus post-cutover attempts, unbound merchant verification, replay and independent readiness passed. The voucher regression uses a distinct notification secret and still exercises failure, expiry and settlement. Provider traffic remains unverified. |
+| Account and reports | Signup retry, one-time and superseded links, queued reset, identical public destinations, refunds, and sale-time category snapshots through guest checkout and POS passed. |
+| Browser | Installed Chrome, Firefox and Playwright WebKit each completed signup, resend, password reset request, merchant configuration, and POS and dashboard fit checks at 320, 390, 768 and 1440 CSS pixels. Each passed the published ordering menu workflow, including anonymous table and takeaway reloads, live updates, media, isolation, unpublish/restore and counter checkout at 320, 375, 768, 1024 and 1440 CSS pixels. |
+| Disposable staging | Linux amd64 image sha256:70312e21be1b6c8f31bdab384d7268bdd81e5167a4c139b28dee76f57ee55a1c with Python 3.12.16 ran without published dependency ports or external network access. Migrations 0041 through 0043 applied. A separate upgrade probe from 0040 preserved an existing queued verification generation and required a generation claim for new jobs. ASGI readiness and Redis group delivery passed. A trusted peer set the ASGI scheme and received HSTS and a secure cookie. An unapproved peer's forwarded header did not bypass HTTPS and a hostile Host was rejected. Production-mode WebSocket delivery reached a scoped guest and rejected a foreign origin. One of two outbox replicas lost progress during a stall while the peer and web stayed healthy. The crashed replica restarted with a new generation. Redis interruption was detected and group delivery recovered after restart. Package consistency passed. Django deployment checks reported the HSTS preload advisory W021. |
+| Encrypted restoration | GnuPG authenticated decryption produced identical PostgreSQL archive bytes. The isolated restore preserved the 6,000 IDR order total, private media SHA-256 and tenant denial. Recovered one current payment bundle, one historical signing bundle, one queued verification redirect, one queued password recovery recipient and two MFA secrets. The original Django signing marker verified under the retained key. Omitting the retained payment or Django key produced the expected failure. |
+| Hosted limits | This round did not exercise hosted TLS/WSS, issued provider credentials or real transactions, delivered alerts, inbox delivery, hosted archival or production RPO/RTO. The release register records exact acceptance evidence required. |
+
+[Stage 1 changes and open gates](STAGE-1-RELEASE-READINESS.md) · [Browser fixture](../tests/browser/serve_ordering_builder.py) · [Hosted and restore procedures](DEPLOYMENT.md)

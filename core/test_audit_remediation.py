@@ -191,10 +191,13 @@ class TenantPaymentRemediationTests(ShopFixture, TestCase):
         super().setUp()
         self.connection = save_payment_connection(
             business=self.business, actor=self.owner, provider="midtrans", environment="sandbox",
-            merchant_id="test-merchant", credentials={"server_key": "SB-Mid-server-synthetic-fixture"},
+            merchant_id="test-merchant", credentials={"server_key": "SB-Mid-server-synthetic-fixture",
+                                                      "signature_secret_key": "synthetic-remediation-signing"},
         )
         self.connection.verified_at = timezone.now()
-        self.connection.save(update_fields=["verified_at"])
+        self.connection.verification_state = "verified"
+        self.connection.approval_reference = "test-approval"
+        self.connection.save(update_fields=["verified_at", "verification_state", "approval_reference"])
 
     def initiate(self, order):
         return initiate_qris_payment(
@@ -325,9 +328,9 @@ class TenantPaymentRemediationTests(ShopFixture, TestCase):
         notify = {
             "order_id": original.merchant_reference, "transaction_id": "old-attempt",
             "status_code": "200", "gross_amount": "25000.00", "transaction_status": "settlement",
-            "payment_type": "qris",
+            "payment_type": "qris", "merchant_id": "test-merchant",
         }
-        signature_source = original.merchant_reference + "20025000.00SB-Mid-server-synthetic-fixture"
+        signature_source = original.merchant_reference + "20025000.00synthetic-remediation-signing"
         notify["signature_key"] = hashlib.sha512(signature_source.encode()).hexdigest()
         for _ in range(2):
             request.return_value = BytesIO(json.dumps(notify).encode())
@@ -384,11 +387,14 @@ class TenderConcurrencyTests(ShopFixture, TransactionTestCase):
     def test_provider_confirmation_wins_during_an_inflight_charge(self):
         order = self.order()
         key = "SB-Mid-server-local-concurrency-fixture"
+        signing_key = "concurrency-notification-secret"
         connection = save_payment_connection(
             business=self.business, actor=self.owner, provider="midtrans", environment="sandbox",
-            merchant_id="local", credentials={"server_key": key},
+            merchant_id="local", credentials={"server_key": key, "signature_secret_key": signing_key},
         )
-        PaymentConnection.objects.filter(pk=connection.pk).update(verified_at=timezone.now())
+        PaymentConnection.objects.filter(pk=connection.pk).update(
+            verified_at=timezone.now(), verification_state="verified", approval_reference="test-approval",
+        )
         charge_sent = Event()
         release_charge = Event()
         payload = {}
@@ -398,8 +404,9 @@ class TenderConcurrencyTests(ShopFixture, TransactionTestCase):
                 return BytesIO(json.dumps(payload).encode())
             reference = json.loads(request.data)["transaction_details"]["order_id"]
             payload.update(order_id=reference, transaction_id="charge-one", status_code="200",
-                           gross_amount="25000.00", payment_type="qris", transaction_status="settlement")
-            payload["signature_key"] = hashlib.sha512((reference + "20025000.00" + key).encode()).hexdigest()
+                           gross_amount="25000.00", payment_type="qris", transaction_status="settlement",
+                           merchant_id="local")
+            payload["signature_key"] = hashlib.sha512((reference + "20025000.00" + signing_key).encode()).hexdigest()
             charge_sent.set()
             if not release_charge.wait(timeout=10):
                 raise TimeoutError("Local verification deadline")

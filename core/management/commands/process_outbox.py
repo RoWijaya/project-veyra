@@ -23,6 +23,7 @@ class Command(BaseCommand):
         event_ids = list(
             OutboxEvent.objects.filter(
                 published_at__isnull=True,
+                failed_at__isnull=True,
                 next_attempt_at__lte=timezone.now(),
             ).order_by("created_at").values_list("pk", flat=True)[:100]
         )

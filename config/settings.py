@@ -1,4 +1,5 @@
 import os
+from ipaddress import ip_network
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -33,6 +34,22 @@ CSRF_TRUSTED_ORIGINS = [
     if origin.strip()
 ]
 
+# Uvicorn authenticates the direct proxy peer before setting the ASGI scheme.
+TRUSTED_PROXY_IPS = os.getenv("VEYRA_TRUSTED_PROXY_IPS", "127.0.0.1,::1")
+if not DEBUG:
+    if not ALLOWED_HOSTS or any(host.startswith(".") or "*" in host for host in ALLOWED_HOSTS):
+        raise RuntimeError("Set exact DJANGO_ALLOWED_HOSTS outside development.")
+    if any(not origin.startswith("https://") or "*" in origin or not urlparse(origin).hostname
+           or urlparse(origin).path or urlparse(origin).username or urlparse(origin).query
+           or urlparse(origin).fragment for origin in CSRF_TRUSTED_ORIGINS):
+        raise RuntimeError("Use exact HTTPS DJANGO_CSRF_TRUSTED_ORIGINS outside development.")
+    try:
+        proxies = [ip_network(value.strip(), strict=False) for value in TRUSTED_PROXY_IPS.split(",")]
+    except ValueError:
+        raise RuntimeError("List only approved proxy IP addresses in VEYRA_TRUSTED_PROXY_IPS.") from None
+    if any(proxy.prefixlen == 0 for proxy in proxies):
+        raise RuntimeError("Do not trust forwarded headers from all addresses.")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -51,6 +68,7 @@ except ImportError:
 
 MIDDLEWARE = [
     "core.observability.RequestContextMiddleware",
+    "core.middleware.HostValidationMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "core.middleware.SecurityHeadersMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -200,7 +218,6 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_REFERRER_POLICY = "same-origin"
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     STORAGES = {
         "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
         "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
@@ -227,6 +244,16 @@ if not DEBUG:
     }
 
 # Platform subscription billing uses a dedicated Midtrans merchant, separate from tenant payments.
+# Legacy notifications are allowed only for explicitly listed tenant connections.
+MIDTRANS_LEGACY_SIGNING_CONNECTIONS = frozenset(
+    value.strip() for value in os.getenv("MIDTRANS_LEGACY_SIGNING_CONNECTIONS", "").split(",") if value.strip()
+)
+VEYRA_BILLING_MIDTRANS_ALLOW_LEGACY_SIGNATURE = env_bool("VEYRA_BILLING_MIDTRANS_ALLOW_LEGACY_SIGNATURE")
+VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_SECRET_KEY = os.environ.get("VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_SECRET_KEY", "")
+VEYRA_BILLING_MIDTRANS_ROTATED_AT = os.environ.get("VEYRA_BILLING_MIDTRANS_ROTATED_AT", "")
+VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_UNTIL = os.environ.get("VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_UNTIL", "")
+VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE = os.environ.get("VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE", "").strip()
+VEYRA_BILLING_MIDTRANS_APPROVED_AT = os.environ.get("VEYRA_BILLING_MIDTRANS_APPROVED_AT", "")
 VEYRA_BILLING_MIDTRANS_SERVER_KEY = os.environ.get("VEYRA_BILLING_MIDTRANS_SERVER_KEY", "")
 VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY = os.environ.get("VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY", "")
 VEYRA_BILLING_MIDTRANS_ENV = os.environ.get("VEYRA_BILLING_MIDTRANS_ENV", "sandbox")

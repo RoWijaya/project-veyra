@@ -1,5 +1,7 @@
 # Stage 1 pre-implementation verification
 
+This document records the pre-implementation evidence and historical plan. See the current implementation, migration and acceptance status in [Stage 1 release gates](STAGE-1-RELEASE-READINESS.md).
+
 ## Repository and evidence
 
 Inspected on 2026-11-26 in D:/Veyra/new-project/Veyra. Branch update, HEAD 0f801fb05698f997f77a482cd5c2104ac0c5f38a, tracking origin/update. The working tree and index were clean at intake. The local tracking reference pointed to the same commit. No fetch, branch change or application change was necessary. Read-only source inspection, local tests with separate databases and a disposable Docker project supplied the evidence below.

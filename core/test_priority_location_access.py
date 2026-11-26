@@ -7,9 +7,10 @@ from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from config.asgi import application
-from .models import DiningTable, Membership, Order, OutboxEvent, Product, Station, User, WorkspaceAssignment
+from .models import DiningTable, InventoryBalance, InventoryItem, Membership, Order, OutboxEvent, Product, Station, User, WorkspaceAssignment
 from .permissions import order_tracking_cookie_name, order_tracking_cookie_signer
 from .services import create_business, create_order, dispatch_outbox_event
 
@@ -154,3 +155,103 @@ class LocationStreamTests(LocationFixture, TransactionTestCase):
                 await socket.disconnect()
 
         asyncio.run(verify())
+
+
+    def test_stock_streams_recheck_scopes_and_keep_other_members_connected(self):
+        self.member.permissions = ["inventory.view"]
+        self.member.save(update_fields=["permissions"])
+        self.member.inventory_locations.add(self.sibling)
+        outsider = User.objects.create_user("outside-stock@example.invalid")
+        other_business = create_business(owner=outsider, name="Other shop", slug="another-shop")
+        item = InventoryItem.objects.create(business=self.business, name="Herbs", unit="kg")
+        for location in (self.location, self.sibling):
+            InventoryBalance.objects.create(item=item, location=location, quantity=5)
+        owner_client, outside_client = self.client_class(), self.client_class()
+        owner_client.force_login(self.owner)
+        outside_client.force_login(outsider)
+
+        def connection(client, stream, slug):
+            cookie = f"{settings.SESSION_COOKIE_NAME}={client.cookies[settings.SESSION_COOKIE_NAME].value}"
+            return WebsocketCommunicator(application, f"/ws/business/{slug}/{stream}/", headers=[
+                (b"origin", b"http://localhost"), (b"cookie", cookie.encode()),
+            ])
+
+        async def broadcast(event_type, location):
+            event = await OutboxEvent.objects.acreate(
+                business=self.business, event_type=event_type, next_attempt_at=timezone.now(),
+                payload={"location_id": location.pk, "item_id": item.pk, "quantity": "3.000",
+                         "purchase_id": "current-purchase"},
+            )
+            self.assertTrue(await sync_to_async(dispatch_outbox_event)(event.pk))
+            return str(event.pk)
+
+        async def verify(stream, event_type):
+            staff = connection(self.client, stream, self.business.slug)
+            owner = connection(owner_client, stream, self.business.slug)
+            foreign = connection(outside_client, stream, self.business.slug)
+            wrong_slug = connection(self.client, stream, other_business.slug)
+            self.assertEqual(await foreign.connect(), (False, 4403))
+            self.assertEqual(await wrong_slug.connect(), (False, 4403))
+            self.assertTrue((await staff.connect())[0])
+            self.assertTrue((await owner.connect())[0])
+            try:
+                current = await broadcast(event_type, self.sibling)
+                first = await staff.receive_json_from(timeout=3)
+                self.assertEqual(first["event_id"], current)
+                if stream == "inventory":
+                    self.assertEqual(first["quantity"], "5.000")
+                self.assertEqual((await owner.receive_json_from(timeout=3))["event_id"], current)
+                await self.member.inventory_locations.aremove(self.sibling)
+                hidden = await broadcast(event_type, self.sibling)
+                still_allowed = await broadcast(event_type, self.location)
+                self.assertEqual((await owner.receive_json_from(timeout=3))["event_id"], hidden)
+                self.assertEqual((await owner.receive_json_from(timeout=3))["event_id"], still_allowed)
+                self.assertEqual((await staff.receive_json_from(timeout=3))["event_id"], still_allowed)
+
+                await Membership.objects.filter(pk=self.member.pk).aupdate(permissions=[])
+                later = await broadcast(event_type, self.location)
+                self.assertEqual((await staff.receive_output(timeout=3))["code"], 4403)
+                self.assertEqual((await owner.receive_json_from(timeout=3))["event_id"], later)
+                self.assertEqual(await connection(self.client, stream, self.business.slug).connect(), (False, 4403))
+                # A transport that has not yet sent its disconnect cannot receive more protected data.
+                last = await broadcast(event_type, self.location)
+                self.assertEqual((await owner.receive_json_from(timeout=3))["event_id"], last)
+                self.assertTrue(await staff.receive_nothing())
+            finally:
+                await staff.disconnect()
+                await owner.disconnect()
+
+        for stream, event_type in (("inventory", "inventory.update"), ("purchasing", "purchase.update")):
+            with self.subTest(stream=stream):
+                Membership.objects.filter(pk=self.member.pk).update(permissions=["inventory.view"])
+                self.member.inventory_locations.add(self.sibling)
+                asyncio.run(verify(stream, event_type))
+
+    def test_purchasing_socket_revokes_suspended_and_removed_members(self):
+        self.member.permissions = ["inventory.view"]
+        self.member.save(update_fields=["permissions"])
+        cookie = f"{settings.SESSION_COOKIE_NAME}={self.client.cookies[settings.SESSION_COOKIE_NAME].value}".encode()
+
+        def socket():
+            return WebsocketCommunicator(application, f"/ws/business/{self.business.slug}/purchasing/", headers=[
+                (b"origin", b"http://localhost"), (b"cookie", cookie),
+            ])
+
+        async def verify():
+            current = socket()
+            self.assertTrue((await current.connect())[0])
+            await Membership.objects.filter(pk=self.member.pk).aupdate(active=False)
+            self.assertEqual((await current.receive_output(timeout=3))["code"], 4403)
+            self.assertEqual(await socket().connect(), (False, 4403))
+            await current.disconnect()
+
+            await Membership.objects.filter(pk=self.member.pk).aupdate(active=True)
+            replacement = socket()
+            self.assertTrue((await replacement.connect())[0])
+            await Membership.objects.filter(pk=self.member.pk).adelete()
+            self.assertEqual((await replacement.receive_output(timeout=3))["code"], 4403)
+            self.assertEqual(await socket().connect(), (False, 4403))
+            await replacement.disconnect()
+
+        with patch("core.consumers.ACCESS_RECHECK_SECONDS", 0.1):
+            asyncio.run(verify())

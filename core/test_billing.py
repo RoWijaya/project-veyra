@@ -144,9 +144,26 @@ def response(data, status=200):
     return Mock(status_code=status, json=Mock(return_value=data))
 
 
-@override_settings(VEYRA_BILLING_MIDTRANS_SERVER_KEY="test-platform-key-only",
-                   VEYRA_BILLING_MIDTRANS_ENV="sandbox", VEYRA_BILLING_PUBLIC_ORIGIN="https://billing.example.invalid")
+@override_settings(
+    VEYRA_BILLING_MIDTRANS_SERVER_KEY="test-platform-key-only",
+    VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY="test-platform-signature",
+    VEYRA_BILLING_MIDTRANS_ENV="sandbox",
+    VEYRA_BILLING_PUBLIC_ORIGIN="https://billing.example.invalid",
+    VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE="synthetic-approval",
+    VEYRA_BILLING_MIDTRANS_APPROVED_AT="2026-01-01T00:00:00Z",
+)
 class BillingGatewayTests(BillingFixture, TestCase):
+    @patch("core.billing_gateway.requests.request")
+    @override_settings(VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE="")
+    def test_platform_checkout_requires_its_own_approval(self, transport):
+        invoice_url = self.invoice_url()
+        self.assertContains(
+            self.client.post(invoice_url, {"action": "checkout"}),
+            "Platform checkout is unavailable", status_code=400,
+        )
+        transport.assert_not_called()
+        self.assertFalse(BillingAttempt.objects.exists())
+
     def checkout(self, invoice_url, transport):
         transport.return_value = response({"redirect_url":"https://app.sandbox.midtrans.com/snap/v4/qa"})
         payment = self.client.post(invoice_url, {"action": "checkout", "gross_amount": "5"})
@@ -159,9 +176,9 @@ class BillingGatewayTests(BillingFixture, TestCase):
         self.assertEqual(request.kwargs["json"]["page_expiry"], {"duration": 24, "unit": "hours"})
         return request.kwargs["json"]["transaction_details"]["order_id"], str(amount)
 
-    def notify(self, reference, amount, transport, status="settlement", *, provider_amount=None):
+    def notify(self, reference, amount, transport, status="settlement", *, provider_amount=None, signing_key="test-platform-signature"):
         payload = {"order_id": reference, "gross_amount": amount, "status_code": "200"}
-        payload["signature_key"] = hashlib.sha512(f"{reference}200{amount}test-platform-key-only".encode()).hexdigest()
+        payload["signature_key"] = hashlib.sha512(f"{reference}200{amount}{signing_key}".encode()).hexdigest()
         transport.return_value = response({
             **payload, "gross_amount": provider_amount or amount, "currency": "IDR", "transaction_status": status,
             "fraud_status": "accept", "transaction_id": "tx-" + reference,
@@ -192,6 +209,20 @@ class BillingGatewayTests(BillingFixture, TestCase):
         self.assertEqual(sub.status, "active")
         self.assertEqual(sub.events.filter(event_type="invoice.paid").count(), 1)
         self.assertEqual(business_entitlements(self.business)["limits"], {"locations": 2})
+
+    @patch("core.billing_gateway.requests.request")
+    def test_platform_rotation_window_is_limited_to_prior_attempts(self, transport):
+        reference, amount = self.checkout(self.invoice_url(), transport)
+        cutover = timezone.now()
+        with override_settings(
+            VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_SECRET_KEY="previous-platform-signature",
+            VEYRA_BILLING_MIDTRANS_ROTATED_AT=cutover.isoformat(),
+            VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_UNTIL=(cutover + timedelta(days=3)).isoformat(),
+        ):
+            self.assertEqual(self.notify(reference, amount, transport, signing_key="previous-platform-signature").status_code, 200)
+            BillingAttempt.objects.update(created_at=cutover + timedelta(seconds=1))
+            self.assertEqual(self.notify(reference, amount, transport, signing_key="previous-platform-signature").status_code, 403)
+            self.assertEqual(self.notify(reference, amount, transport).status_code, 200)
 
     @patch("core.billing_gateway.requests.request")
     def test_timeout_reuses_provider_payment_reference(self, transport):

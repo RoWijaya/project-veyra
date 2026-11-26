@@ -605,7 +605,9 @@ class TenantAndOrderTests(TestCase):
             credentials={"server_key": "SB-Mid-server-TESTKEY12345678"},
         )
         connection.verified_at = timezone.now()
-        connection.save(update_fields=["verified_at"])
+        connection.verification_state = "verified"
+        connection.approval_reference = "test-approval"
+        connection.save(update_fields=["verified_at", "verification_state", "approval_reference"])
         self.client.force_login(self.owner)
         location = self.business.locations.get(name="Main location")
         self.client.post(
@@ -1943,13 +1945,14 @@ class PaymentIntegrationAndWebhookTests(TestCase):
             business=self.business, name="Cold Brew", price=Decimal("25000.00")
         )
         self.server_key = "SB-Mid-server-TESTKEY12345678"
+        self.signing_key = "test-notification-secret"
         self.connection = save_payment_connection(
             business=self.business,
             actor=self.owner,
             provider="midtrans",
             environment="sandbox",
             merchant_id="G123456",
-            credentials={"server_key": self.server_key},
+            credentials={"server_key": self.server_key, "signature_secret_key": self.signing_key},
         )
 
     def test_credential_format_alone_does_not_enable_payment(self):
@@ -1966,7 +1969,9 @@ class PaymentIntegrationAndWebhookTests(TestCase):
     @patch("urllib.request.urlopen")
     def test_initiate_midtrans_qris_and_after_paid_release(self, mock_urlopen):
         self.connection.verified_at = timezone.now()
-        self.connection.save(update_fields=["verified_at"])
+        self.connection.verification_state = "verified"
+        self.connection.approval_reference = "test-approval"
+        self.connection.save(update_fields=["verified_at", "verification_state", "approval_reference"])
         order = create_order(
             business=self.business,
             actor=self.owner,
@@ -2002,7 +2007,7 @@ class PaymentIntegrationAndWebhookTests(TestCase):
         status_code = "200"
         gross_amount = str(int(order.total))
         import hashlib
-        raw_sig = f"{order_id}{status_code}{gross_amount}{self.server_key}"
+        raw_sig = f"{order_id}{status_code}{gross_amount}{self.signing_key}"
         sig_key = hashlib.sha512(raw_sig.encode()).hexdigest()
 
         webhook_payload = {
@@ -2084,7 +2089,9 @@ class PaymentIntegrationAndWebhookTests(TestCase):
             credentials={"client_id": client_id, "client_secret": client_secret},
         )
         bca_conn.verified_at = timezone.now()
-        bca_conn.save(update_fields=["verified_at"])
+        bca_conn.verification_state = "verified"
+        bca_conn.approval_reference = "test-approval"
+        bca_conn.save(update_fields=["verified_at", "verification_state", "approval_reference"])
         order = create_order(
             business=self.business,
             actor=self.owner,

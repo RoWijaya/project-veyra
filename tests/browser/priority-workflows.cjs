@@ -34,12 +34,21 @@ async function checkWidths(page) {
     await page.locator("form button[type=submit]").first().click();
     await page.getByRole("heading", { name: "Check your email" }).waitFor();
 
-    await page.getByRole("link", { name: "Back to sign in" }).click();
+    await page.goto(origin + "/password-reset/");
+    await page.locator("input[name=email]").fill(fixture.email);
+    await page.locator("form button[type=submit]").first().click();
+    await page.waitForURL("**/password-reset/done/");
+    await checkWidths(page);
+    const paymentsPath = fixture.root + "payments/";
+    await page.goto(origin + "/login/?next=" + encodeURIComponent(paymentsPath));
     await page.locator("input[name=email]").fill(fixture.email);
     await page.locator("input[name=password]").fill(fixture.password);
     await page.locator("form button[type=submit]").first().click();
-    await page.goto(origin + fixture.root + "payments/");
+    await page.waitForURL(url => url.pathname === paymentsPath, {waitUntil: "domcontentloaded"});
     const form = page.locator("form[data-provider-form]");
+    if (!await form.isVisible()) {
+      await page.getByText("Save or replace credentials", {exact: true}).click();
+    }
     await form.locator("[name=provider]").selectOption("bca_qris");
     await form.locator("[name=environment]").selectOption("sandbox");
     await form.locator("[name=merchant_id]").fill("qa-merchant-" + engine);
@@ -52,7 +61,13 @@ async function checkWidths(page) {
     await page.getByRole("button", { name: "Verify connection" }).click();
     await page.getByText("Provider approval required", { exact: true }).waitFor();
     await checkWidths(page);
-    console.log(engine + " passed signup, resend and merchant configuration at four widths.");
+    await page.goto(origin + fixture.root + "pos/");
+    await page.getByRole("heading", {name: "Orders & POS"}).waitFor();
+    await checkWidths(page);
+    await page.goto(origin + fixture.root);
+    await page.locator("main h1").first().waitFor();
+    await checkWidths(page);
+    console.log(engine + " passed signup, resend, password recovery, merchant configuration and Management fit.");
   } finally {
     await browser.close();
   }

@@ -4,6 +4,7 @@ import hashlib
 import os
 from io import BytesIO
 from secrets import token_urlsafe
+from datetime import timedelta
 
 import pyotp
 from PIL import Image
@@ -13,10 +14,12 @@ from django.core.management import call_command
 from django.db import connection, transaction
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
+from core.account_mail import queue_verification, redirect_cipher
 from core.identity import account_cipher
 from core.media_services import normalize_image
-from core.models import Authenticator, Business, Product, ProductImage, User
+from core.models import Authenticator, Business, PasswordRecoveryDelivery, PaymentTransaction, Product, ProductImage, User
 from core.services import create_business, create_order, read_payment_credentials, save_payment_connection
 
 mode = os.environ["VEYRA_RECOVERY_MODE"]
@@ -36,7 +39,7 @@ if mode == "seed":
                 user=user, confirmed=True,
                 secret_ciphertext=account_cipher().encrypt(pyotp.random_base32().encode()).decode(),
             )
-        save_payment_connection(
+        connection_row = save_payment_connection(
             business=business, actor=owner, provider="midtrans", environment="sandbox",
             merchant_id="synthetic-recovery", credentials={
                 "server_key": "synthetic_" + token_urlsafe(20),
@@ -50,7 +53,28 @@ if mode == "seed":
         ProductImage.objects.create(
             product=product, content=normalize_image(SimpleUploadedFile("fixture.png", photo.getvalue(), "image/png")),
         )
-        create_order(business=business, actor=owner, location_id=business.locations.get().pk, items=[(product.pk, 2)])
+        sale = create_order(
+            business=business, actor=owner, location_id=business.locations.get().pk, items=[(product.pk, 2)],
+        )
+        attempt = PaymentTransaction.objects.create(
+            business=business, order=sale, connection=connection_row, provider="midtrans", environment="sandbox",
+            merchant_reference="disposable-recovery-reference", amount=sale.total,
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        save_payment_connection(
+            business=business, actor=owner, provider="midtrans", environment="sandbox",
+            merchant_id="synthetic-recovery", credentials={
+                "server_key": "synthetic_" + token_urlsafe(20),
+                "signature_secret_key": "synthetic_" + token_urlsafe(20),
+            },
+        )
+        attempt.refresh_from_db()
+        assert attempt.signing_version_id
+        pending = User.objects.create_user("restore-pending@example.invalid", is_active=False)
+        queue_verification(user_id=pending.pk, origin="https://localhost", next_url="/app/")
+        PasswordRecoveryDelivery.objects.create(
+            origin="https://localhost", recipient_ciphertext=redirect_cipher().encrypt(owner.email.encode()).decode(),
+        )
 
 business = Business.objects.get(slug="restore-fixture")
 owner = business.owner

@@ -136,7 +136,7 @@ def _context(storefront, token, cart, draft_type=None):
     asset_version = None
     if design:
         asset_version = design.saved_at if is_snapshot else design.updated_at
-    providers = business.payment_connections.filter(verified_at__isnull=False)
+    providers = business.payment_connections.ready()
     if total <= 0:
         providers = providers.none()
     elif total != total.to_integral_value():

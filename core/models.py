@@ -64,6 +64,7 @@ class VerificationDelivery(models.Model):
     origin = models.CharField(max_length=400)
     next_url = models.TextField(blank=True)
     generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    accept_legacy_token = models.BooleanField(default=False)
     claim_token = models.UUIDField(null=True, editable=False)
     state = models.CharField(max_length=12, choices=State.choices, default=State.PENDING)
     result = models.CharField(max_length=32, blank=True)
@@ -73,6 +74,21 @@ class VerificationDelivery(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["state", "next_attempt_at"])]
+
+
+class PasswordRecoveryDelivery(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    recipient_ciphertext = models.TextField(blank=True)
+    origin = models.CharField(max_length=400)
+    requested_at = models.DateTimeField(default=timezone.now)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    claim_token = models.UUIDField(null=True, editable=False)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    failed = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [models.Index(fields=["finished_at", "next_attempt_at"])]
 
 
 class GoogleIdentity(models.Model):
@@ -566,7 +582,14 @@ class PairedDevice(models.Model):
         indexes = [models.Index(fields=["station", "revoked_at"])]
 
 
+class PaymentConnectionQuerySet(models.QuerySet):
+    def ready(self):
+        return self.filter(verified_at__isnull=False, verification_state="verified").exclude(approval_reference="")
+
+
 class PaymentConnection(models.Model):
+    objects = PaymentConnectionQuerySet.as_manager()
+
     class Provider(models.TextChoices):
         MIDTRANS = "midtrans", "Midtrans"
         BCA_QRIS = "bca_qris", "BCA QRIS (SNAP)"
@@ -606,6 +629,13 @@ class PaymentConnection(models.Model):
                 fields=["business", "provider"], name="uniq_business_payment_provider"
             )
         ]
+
+
+class PaymentSigningVersion(models.Model):
+    connection = models.ForeignKey(PaymentConnection, on_delete=models.CASCADE, related_name="signing_versions")
+    ciphertext = models.TextField(blank=True)
+    valid_until = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
 
 
 class Category(models.Model):
@@ -1223,6 +1253,7 @@ class OutboxEvent(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     next_attempt_at = models.DateTimeField()
     published_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     last_error = models.CharField(max_length=300, blank=True)
 
@@ -1489,6 +1520,9 @@ class PaymentTransaction(models.Model):
     )
     provider = models.CharField(max_length=24, choices=PaymentConnection.Provider.choices)
     environment = models.CharField(max_length=16, choices=PaymentConnection.Environment.choices)
+    signing_version = models.ForeignKey(
+        PaymentSigningVersion, null=True, blank=True, on_delete=models.PROTECT, related_name="attempts",
+    )
     provider_transaction_id = models.CharField(max_length=120, blank=True, db_index=True)
     merchant_reference = models.CharField(max_length=120, blank=True, db_index=True)
     idempotency_key = models.UUIDField(default=uuid.uuid4)

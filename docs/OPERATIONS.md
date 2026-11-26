@@ -39,3 +39,14 @@ Worker heartbeats and aggregate queue diagnostics are available in the staging i
 4. Resolve balance and receipt differences after confirmed evidence. Operational order cancellation is a separate action.
 
 [Payment and refund lifecycle](PAYMENTS.md) · [Security and recovery](SECURITY.md)
+
+
+## Replica progress and queue incident response
+
+Worker progress is scoped to the container hostname by default. Set a unique VEYRA_WORKER_INSTANCE_ID for each worker process sharing a host and worker type. Each process launch writes a new generation value. Use the container-local check, or pass the expected identity with check_worker WORKER --instance ID. A healthy idle worker renews its progress key. An absent key means the expected replica is stalled, stopped or unable to reach Redis. A working peer cannot satisfy another replica's check.
+
+Outbox dispatch permits 12 claims with bounded backoff. An exhausted or abandoned final lease stays in PostgreSQL with a failure timestamp. Exhausted events stay visible to check_operational_queues. Investigate the event and dependency under restricted access, fix the cause and record the incident before running python manage.py redrive_outbox --business SLUG --event UUID --evidence INCIDENT. Redrive reuses the event identity and keeps an audit record. Inventory views obtain the current scoped balance, so an old notification cannot overwrite newer stock.
+
+Set separate alarms for the public health endpoint, database connectivity, Redis connectivity, each expected worker replica and delayed or exhausted queue work. Keep the alert route private. Use a protected database probe with pg_isready plus an authenticated read and a protected redis-cli PING with approved credentials. A green web dependency probe does not vouch for worker progress. A crash is supervised by the container restart policy. Test operator or host-level action for a stalled process. Verify an alert is delivered and acknowledged for each class before marking hosted monitoring accepted. Customer emails, verification links, raw payment events and credentials do not belong in alerts.
+
+Password recovery uses the supervised account-mail worker. The public response is independent of account membership. Operators can inspect aggregate delayed and failed counters. A terminal request clears its queued recipient data. Encourage a fresh request after fixing delivery. Use a dedicated staging recipient to confirm sender acceptance and inbox arrival. Keep the debug console mail backend confined to synthetic local fixtures.

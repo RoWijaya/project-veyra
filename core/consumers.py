@@ -8,6 +8,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from .permissions import (
     guest_menu_business_id,
     inventory_stream_business_id,
+    inventory_stream_snapshot,
     order_for_tracking_cookie,
     order_stream_business_id,
     order_stream_snapshot,
@@ -35,9 +36,15 @@ class AuthorizedStream(AsyncJsonWebsocketConsumer):
             await self.close(code=1011)
 
     async def check_access(self):
+        if getattr(self, "access_revoked", False):
+            return False
         session_check = self.scope.get("veyra_session_authorized")
         if (session_check and not await session_check()) or not await self.authorized():
-            await self.close(code=4403)
+            self.access_revoked = True
+            try:
+                await self.unsubscribe()
+            finally:
+                await self.close(code=4403)
             return False
         return True
 
@@ -50,8 +57,13 @@ class AuthorizedStream(AsyncJsonWebsocketConsumer):
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        if hasattr(self, "group_name"):
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        await self.unsubscribe()
+
+    async def unsubscribe(self):
+        group = getattr(self, "group_name", None)
+        if group:
+            self.group_name = None
+            await self.channel_layer.group_discard(group, self.channel_name)
 
 
 class BusinessStream(AuthorizedStream):
@@ -169,15 +181,18 @@ class BusinessInventoryConsumer(BusinessStream):
         )
 
     async def inventory_update(self, event):
-        if await self.may_read_location(event):
+        if not await self.check_access():
+            return
+        item = str(event.get("item_id"))
+        location = str(event.get("location_id"))
+        current = await database_sync_to_async(inventory_stream_snapshot)(self.user_id, self.slug, item, location)
+        if current:
             await self.send_json({
                 "event_id": event["event_id"],
                 "event": "inventory.update",
-                "item_id": event["item_id"],
-                "location_id": event["location_id"],
-                "quantity": event["quantity"],
-                "last_purchase_unit_cost": event.get("last_purchase_unit_cost"),
-                "current_cost_estimate": event.get("current_cost_estimate"),
+                "item_id": item,
+                "location_id": location,
+                **current,
             })
 
 

@@ -1,4 +1,6 @@
 from django.contrib.auth import views as auth_views
+
+from .password_recovery import QueuedPasswordResetView
 from django.urls import path
 
 from . import customer_views, device_views, identity_views, media_views, modifier_views, ordering_views, views, voucher_views
@@ -62,7 +64,7 @@ urlpatterns = [
     path("verify/<str:uidb64>/<str:token>/", views.verify_email, name="verify_email"),
     path(
         "password-reset/",
-        auth_views.PasswordResetView.as_view(
+        QueuedPasswordResetView.as_view(
             template_name="core/auth.html", email_template_name="core/password_reset_email.html"
         ),
         name="password_reset",

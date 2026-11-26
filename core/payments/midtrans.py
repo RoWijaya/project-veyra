@@ -12,8 +12,18 @@ from decimal import Decimal
 from typing import Any, Dict, Tuple
 
 import requests
+from django.conf import settings
 
 from .base import BasePaymentAdapter, PaymentResult, qris_start_time
+
+
+def notification_credentials(connection, credentials):
+    secret = credentials.get("signature_secret_key", "").strip()
+    if secret and secret != credentials.get("server_key", "").strip():
+        return {"signature_secret_key": secret}
+    if "signature_secret_key" not in credentials and str(connection.pk) in settings.MIDTRANS_LEGACY_SIGNING_CONNECTIONS:
+        return {"server_key": credentials.get("server_key", "")}
+    return {}
 
 
 def valid_notification_signature(payload, secret):
@@ -74,6 +84,7 @@ class MidtransAdapter(BasePaymentAdapter):
                 and (payment.provider_transaction_id or not allow_unbound))
             or reference != payment.merchant_reference or not amount.is_finite() or amount != payment.amount
             or payload.get("currency", "IDR") != payment.currency or payload.get("payment_type") != "qris"
+            or (not payment.provider_transaction_id and not payload.get("merchant_id"))
             or payload.get("merchant_id", payment.connection.merchant_id) != payment.connection.merchant_id
         ):
             raise MidtransStatusUnavailable("Midtrans status did not match the original QRIS payment.")
@@ -190,8 +201,8 @@ class MidtransAdapter(BasePaymentAdapter):
         headers: Dict[str, Any],
         raw_body: bytes,
     ) -> Tuple[bool, str]:
-        # A stored legacy bundle can still verify callbacks for existing payments.
-        secret = credentials.get("signature_secret_key", credentials.get("server_key", ""))
+        signing = notification_credentials(connection, credentials)
+        secret = signing.get("signature_secret_key", signing.get("server_key", ""))
         valid = valid_notification_signature(payload, secret)
         return valid, "" if valid else "Signature mismatch"
 

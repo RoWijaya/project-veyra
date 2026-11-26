@@ -1,4 +1,7 @@
+import os
 import signal
+from socket import gethostname
+from uuid import uuid4
 from contextlib import contextmanager
 from threading import Event, current_thread, main_thread
 
@@ -11,8 +14,12 @@ HEARTBEAT_TTL = 180
 WORKERS = ("outbox", "billing", "refunds", "account_mail")
 
 
-def heartbeat_key(name):
-    return f"veyra:worker:{name}:progress"
+def worker_instance():
+    return os.getenv("VEYRA_WORKER_INSTANCE_ID") or gethostname()
+
+
+def heartbeat_key(name, instance=None):
+    return f"veyra:worker:{name}:{instance or worker_instance()}:progress"
 
 
 def redis_client():
@@ -41,13 +48,15 @@ def run_worker(name, process_batch, *, once, interval):
     if once:
         process_batch(lambda: False)
         return
+    key = heartbeat_key(name)
+    generation = uuid4().hex
     with worker_shutdown() as stopping, redis_client() as redis:
         while not stopping.is_set():
             def checkpoint():
                 if stopping.is_set():
                     return True
                 try:
-                    redis.set(heartbeat_key(name), b"ok", ex=HEARTBEAT_TTL)
+                    redis.set(key, generation, ex=HEARTBEAT_TTL)
                 except RedisError:
                     logger.warning("Worker progress could not be recorded", extra={"event": f"worker.{name}.heartbeat_failed"})
                 return False

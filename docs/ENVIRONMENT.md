@@ -60,7 +60,7 @@ Without Resend, debug mode uses the console backend and non-debug mode uses SMTP
 | ``PAYMENT_CREDENTIALS_ENCRYPTION_FALLBACK_KEYS`` | Payment key rotation and recovery | Comma-separated decryption keys retained while old records or backups need them. | Yes |
 | ``VEYRA_BILLING_MIDTRANS_ENV`` | Platform checkout | ``sandbox`` or ``production``. Default sandbox. | No |
 | ``VEYRA_BILLING_MIDTRANS_SERVER_KEY`` | Platform checkout and reconciliation | Separate Veyra merchant server key. Default blank. | Yes |
-| ``VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY`` | Platform Midtrans callback | The Signature Secret Key for Veyra’s subscription merchant and the selected environment. A blank setting preserves legacy signing until it is configured. | Yes |
+| ``VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY`` | Platform Midtrans callback | The Signature Secret Key for Veyra’s subscription merchant and the selected environment. A blank value blocks new checkout and fails closed unless the platform legacy drain is explicitly enabled. | Yes |
 | ``VEYRA_BILLING_PUBLIC_ORIGIN`` | Platform checkout | Public origin, no path, HTTPS for hosting. Default blank. | No |
 | ``SUPABASE_MEDIA_URL`` | Private archive, with both values below | HTTPS Supabase project origin. Default blank. | Deployment detail |
 | ``SUPABASE_MEDIA_BUCKET`` | Private archive | Private bucket name. Default blank. | Deployment detail |
@@ -73,3 +73,18 @@ Generate a distinct key for each Fernet setting. Copy it directly into the priva
 ```
 
 New writes use the primary key. Previously written records can use any configured fallback key. Re-encrypt and verify old records before retiring keys, and retain keys separately for any backups still within retention. [Deployment](DEPLOYMENT.md) · [Security](SECURITY.md) · [Payments](PAYMENTS.md)
+
+
+## Stage 1 payment and worker configuration
+
+| Variable | Purpose | Secret |
+| --- | --- | --- |
+| VEYRA_TRUSTED_PROXY_IPS | Exact trusted direct proxy peers or dedicated proxy networks. Defaults to loopback. No all-address entries. Include the container loopback health-probe peer. | No |
+| VEYRA_WORKER_INSTANCE_ID | Unique per worker replica of the same type. Defaults to the container hostname. | No |
+| MIDTRANS_LEGACY_SIGNING_CONNECTIONS | Comma-separated exact IDs for authorized legacy tenant connections. Blank disables fallback. | No |
+| VEYRA_BILLING_MIDTRANS_ALLOW_LEGACY_SIGNATURE | Opt in to legacy platform notifications for a drain, separate from tenant compatibility. Default false. | No |
+| VEYRA_BILLING_MIDTRANS_APPROVAL_REFERENCE | Independent operator evidence reference for new platform checkout. Use printable ASCII up to 120 characters. | No |
+| VEYRA_BILLING_MIDTRANS_APPROVED_AT | Approval time with an RFC 3339 timezone offset. Future approvals are rejected. | No |
+| VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_SECRET_KEY | Prior platform signing material for an approved cutover. | Yes |
+| VEYRA_BILLING_MIDTRANS_ROTATED_AT | Platform cutover time with a timezone offset. | No |
+| VEYRA_BILLING_MIDTRANS_PREVIOUS_SIGNATURE_UNTIL | Prior signing key deadline with a timezone offset. Maximum window is 30 days. | No |

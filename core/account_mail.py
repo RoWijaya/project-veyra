@@ -56,6 +56,7 @@ def queue_verification(*, user_id, origin, next_url, resend=False):
         "next_url": redirect_cipher().encrypt(next_url.encode()).decode() if next_url else "",
         "state": VerificationDelivery.State.PENDING,
         "generation": uuid.uuid4(),
+        "accept_legacy_token": False,
         "claim_token": None,
         "requested_at": now,
         "next_attempt_at": now,
@@ -67,13 +68,17 @@ def queue_verification(*, user_id, origin, next_url, resend=False):
     return delivery.pk
 
 
-def deliver_in_memory(pk):
-    # Django's in-memory mailbox is process-local. SMTP and Resend always run in the worker.
+def in_memory_mail():
     if django.VERSION >= (6, 1):
         backend = settings.MAILERS["default"]["BACKEND"]
     else:
         backend = settings.EMAIL_BACKEND
-    if pk and backend == "django.core.mail.backends.locmem.EmailBackend":
+    return backend == "django.core.mail.backends.locmem.EmailBackend"
+
+
+def deliver_in_memory(pk):
+    # Django's in-memory mailbox is process-local. SMTP and Resend always run in the worker.
+    if pk and in_memory_mail():
         deliver_verification(pk)
 
 
@@ -94,7 +99,7 @@ class VerificationSigner(signing.TimestampSigner):
 
 
 def verification_link(delivery):
-    token = VerificationSigner(delivery.requested_at).sign_object(delivery.user_id)
+    token = VerificationSigner(delivery.requested_at).sign_object([delivery.user_id, str(delivery.generation)])
     uid = urlsafe_base64_encode(str(delivery.user_id).encode())
     path = reverse("verify_email", kwargs={"uidb64": uid, "token": token})
     if delivery.next_url:

@@ -11,4 +11,4 @@ COPY manage.py ./
 RUN python -m pip install --no-cache-dir --no-build-isolation --no-deps . && python -m pip check
 RUN DJANGO_SECRET_KEY=build-only-placeholder-key-over-40-characters-required python manage.py collectstatic --noinput
 EXPOSE 8000
-CMD ["sh", "-c", "exec uvicorn config.asgi:application --host 0.0.0.0 --port \"${PORT:-8000}\" --no-access-log --log-level warning"]
+CMD ["sh", "-c", "exec uvicorn config.asgi:application --host 0.0.0.0 --port \"${PORT:-8000}\" --proxy-headers --forwarded-allow-ips \"${VEYRA_TRUSTED_PROXY_IPS:-127.0.0.1,::1}\" --no-access-log --log-level warning"]

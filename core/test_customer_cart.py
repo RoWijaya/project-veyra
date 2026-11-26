@@ -201,12 +201,15 @@ class CustomerCartTests(TestCase):
     @patch("urllib.request.urlopen")
     def test_pickup_qris_waits_for_provider_confirmed_settlement(self, provider_request):
         server_key = "SB-Mid-server-TESTPICKUP123456"
+        signing_key = "pickup-notification-secret"
         connection = save_payment_connection(
             business=self.business, actor=self.owner, provider="midtrans",
-            environment="sandbox", merchant_id="PICKUP-TEST", credentials={"server_key": server_key},
+            environment="sandbox", merchant_id="PICKUP-TEST", credentials={"server_key": server_key, "signature_secret_key": signing_key},
         )
         connection.verified_at = timezone.now()
-        connection.save(update_fields=["verified_at"])
+        connection.verification_state = "verified"
+        connection.approval_reference = "test-approval"
+        connection.save(update_fields=["verified_at", "verification_state", "approval_reference"])
         response = MagicMock()
         response.read.return_value = json.dumps({
             "status_code": "201", "transaction_id": "pickup-midtrans-test", "qr_string": "000201pickup",
@@ -240,7 +243,7 @@ class CustomerCartTests(TestCase):
         self.assertContains(self.client.get(checkout.url), 'data-order-status="New"')
         merchant_reference = tracking.context["payment"].merchant_reference
         amount = "25000"
-        signature = hashlib.sha512(f"{merchant_reference}200{amount}{server_key}".encode()).hexdigest()
+        signature = hashlib.sha512(f"{merchant_reference}200{amount}{signing_key}".encode()).hexdigest()
         notification = {
             "order_id": merchant_reference, "status_code": "200", "gross_amount": amount,
             "transaction_status": "settlement", "fraud_status": "accept",

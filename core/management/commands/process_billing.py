@@ -3,8 +3,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from core.billing import GRACE_PERIOD, advance_subscription
-from core.billing_gateway import BillingGatewayError, gateway_available, reconcile_payment
-from core.models import BillingAttempt, BusinessSubscription
+from core.billing_gateway import BillingGatewayError, platform_api_available, reconcile_payment
+from core.models import BillingAttempt, BusinessSubscription, PaymentSigningVersion
 from core.workers import run_worker
 
 
@@ -20,6 +20,9 @@ class Command(BaseCommand):
 
     def reconcile_batch(self, stopping):
         now = timezone.now()
+        PaymentSigningVersion.objects.filter(valid_until__lte=now, revoked_at__isnull=True).update(
+            ciphertext="", revoked_at=now,
+        )
         upcoming = BusinessSubscription.objects.filter(
             Q(status="trial", trial_ends_at__lte=now)
             | Q(status="active", current_period_end__lte=now)
@@ -29,7 +32,7 @@ class Command(BaseCommand):
             if stopping():
                 return
             advance_subscription(business_id, now)
-        if gateway_available():
+        if platform_api_available():
             stale_attempts = BillingAttempt.objects.filter(status="pending", retry_after__lte=now)
             for attempt_id in list(stale_attempts.order_by("retry_after").values_list("pk", flat=True)[:20]):
                 if stopping():

@@ -9,7 +9,7 @@ from django.conf import settings
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
-from .models import User, VerificationDelivery
+from .models import PasswordRecoveryDelivery, User, VerificationDelivery
 
 
 @override_settings(
@@ -97,3 +97,43 @@ class DurableAccountMailTests(TestCase):
         self.assertNotEqual(first_key, transport.call_args.kwargs["headers"]["Idempotency-Key"])
         job.refresh_from_db()
         self.assertEqual(job.state, VerificationDelivery.State.SENT)
+
+    @patch("core.email_backend.requests.post")
+    def test_resend_supersedes_the_preceding_verification_link(self, transport):
+        transport.return_value = Mock(status_code=200, json=Mock(return_value={"id": "synthetic-email"}))
+        self.register()
+        call_command("process_account_mail", once=True)
+        first = urlsplit(transport.call_args.kwargs["json"]["text"].removeprefix("Confirm your email: ")).path
+        self.client.post("/verification/resend/", {"email": self.email})
+        call_command("process_account_mail", once=True)
+        replacement = urlsplit(transport.call_args.kwargs["json"]["text"].removeprefix("Confirm your email: ")).path
+        self.assertNotEqual(first, replacement)
+        self.assertEqual(self.client.get(first).status_code, 400)
+        self.assertFalse(User.objects.get(email=self.email).is_active)
+        self.assertEqual(self.client.get(replacement).status_code, 200)
+        self.assertEqual(self.client.get(replacement).status_code, 400)
+
+    @patch("core.email_backend.requests.post")
+    def test_password_recovery_queues_known_and_unknown_requests_with_the_same_response(self, transport):
+        user = User.objects.create_user(self.email, self.password)
+        known = self.client.post("/password-reset/", {"email": user.email})
+        unknown = self.client.post("/password-reset/", {"email": "unknown@example.invalid"})
+        repeated = self.client.post("/password-reset/", {"email": user.email})
+        self.assertEqual(known.status_code, 302)
+        self.assertEqual(known.url, unknown.url)
+        self.assertEqual(known.url, repeated.url)
+        transport.assert_not_called()
+        self.assertEqual(PasswordRecoveryDelivery.objects.count(), 2)
+        transport.side_effect = requests.Timeout
+        call_command("process_account_mail", once=True)
+        transport.assert_called_once()
+        pending = PasswordRecoveryDelivery.objects.get(finished_at__isnull=True)
+        self.assertNotIn(user.email, pending.recipient_ciphertext)
+        first_key = transport.call_args.kwargs["headers"]["Idempotency-Key"]
+        PasswordRecoveryDelivery.objects.filter(pk=pending.pk).update(next_attempt_at=timezone.now())
+        transport.side_effect = None
+        transport.return_value = Mock(status_code=200, json=Mock(return_value={"id": "synthetic-email"}))
+        call_command("process_account_mail", once=True)
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(first_key, transport.call_args.kwargs["headers"]["Idempotency-Key"])
+        self.assertFalse(PasswordRecoveryDelivery.objects.exclude(recipient_ciphertext="").exists())

@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 
 from core.account_mail import deliver_verification, due_deliveries
 from core.workers import run_worker
+from core.password_recovery import deliver_password_recovery, due_password_recovery
 
 
 class Command(BaseCommand):
@@ -20,3 +21,8 @@ class Command(BaseCommand):
             if stopping():
                 return
             deliver_verification(pk)
+        reset_ids = list(due_password_recovery().order_by("next_attempt_at", "pk").values_list("pk", flat=True)[:50])
+        for pk in reset_ids:
+            if stopping():
+                return
+            deliver_password_recovery(pk)
