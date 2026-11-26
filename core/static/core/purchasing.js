@@ -44,17 +44,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let socket;
   let timer;
-  let request;
+  let refreshing = false;
   let stopped = false;
   let refreshAgain = false;
   let delay = 1000;
 
   const refresh = async () => {
     if (stopped) return;
-    if (request) { refreshAgain = true; return; }
-    request = new AbortController();
+    if (refreshing) { refreshAgain = true; return; }
+    refreshing = true;
     try {
-      const response = await fetch(location.href, { cache: "no-store", signal: request.signal });
+      const response = await fetch(location.href, { cache: "no-store" });
+      if (stopped) return;
       const current = stream.querySelector("[data-purchase-refresh]");
       if (response.status === 403 || response.status === 404 || response.redirected) {
         if (current) current.hidden = true;
@@ -65,7 +66,9 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (!response.ok && !(receiving && response.status === 409)) throw new Error("Purchase unavailable");
-      const page = new DOMParser().parseFromString(await response.text(), "text/html");
+      const html = await response.text();
+      if (stopped) return;
+      const page = new DOMParser().parseFromString(html, "text/html");
       if (receiving) {
         const latest = page.querySelector("[data-receiving-form]");
         receiving.querySelector("[data-record-receiving]").disabled = !latest;
@@ -104,11 +107,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       status.textContent = "Live purchases synchronized.";
     } catch (_) {
-      if (stopped || request.signal.aborted) return;
+      if (stopped) return;
       status.textContent = "Live synchronization failed. Reconnecting…";
       socket?.close();
     } finally {
-      request = undefined;
+      refreshing = false;
       if (refreshAgain) { refreshAgain = false; refresh(); }
     }
   };
@@ -133,7 +136,6 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const pause = () => {
     stopped = true;
-    request?.abort();
     clearTimeout(timer);
     socket?.close();
   };

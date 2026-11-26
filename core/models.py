@@ -52,6 +52,29 @@ class User(AbstractUser):
         return super().save(*args, **kwargs)
 
 
+class VerificationDelivery(models.Model):
+    class State(models.TextChoices):
+        PENDING = "pending", "Awaiting delivery"
+        SENDING = "sending", "Delivery in progress"
+        SENT = "sent", "Accepted by mail service"
+        FAILED = "failed", "Delivery failed"
+        CLOSED = "closed", "Account verified"
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="verification_delivery")
+    origin = models.CharField(max_length=400)
+    next_url = models.TextField(blank=True)
+    generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    claim_token = models.UUIDField(null=True, editable=False)
+    state = models.CharField(max_length=12, choices=State.choices, default=State.PENDING)
+    result = models.CharField(max_length=32, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    requested_at = models.DateTimeField()
+    next_attempt_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["state", "next_attempt_at"])]
+
+
 class GoogleIdentity(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="google_identity")
     subject = models.CharField(max_length=255, unique=True)
@@ -94,8 +117,31 @@ class OrderingPage(models.Model):
     display_name = models.CharField(max_length=100, blank=True)
     introduction = models.CharField(max_length=240, blank=True)
     banner_content = models.BinaryField(null=True)
+    logo_content = models.BinaryField(null=True)
     banner_alt = models.CharField(max_length=200, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    appearance = models.JSONField(default=dict, blank=True)
+    is_published = models.BooleanField(default=True)
+    revision = models.PositiveBigIntegerField(default=0)
+    published_number = models.PositiveBigIntegerField(null=True, blank=True)
+
+
+class OrderingPageSnapshot(models.Model):
+    """One editable draft (no number) and immutable numbered publications."""
+
+    page = models.ForeignKey(OrderingPage, on_delete=models.CASCADE, related_name="snapshots")
+    number = models.PositiveBigIntegerField(null=True, blank=True)
+    data = models.JSONField(default=dict)
+    logo_content = models.BinaryField(null=True)
+    banner_content = models.BinaryField(null=True)
+    saved_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("page",), condition=models.Q(number__isnull=True),
+                                    name="one_ordering_page_draft"),
+            models.UniqueConstraint(fields=("page", "number"), name="uniq_ordering_page_publication"),
+        ]
 
 
 class Membership(models.Model):
@@ -115,11 +161,23 @@ class Membership(models.Model):
     def allows(self, permission):
         return self.business.owner_id == self.user_id or permission in self.permissions
 
-    def allowed_inventory_locations(self):
+    @property
+    def location_restricted(self):
+        return self.inventory_restricted and self.business.owner_id != self.user_id
+
+    def allowed_locations(self):
         locations = self.business.locations.all()
-        if self.inventory_restricted and self.business.owner_id != self.user_id:
+        if self.location_restricted:
             return locations.filter(inventory_members=self)
         return locations
+
+    def scope_locations(self, queryset, field="location"):
+        if self.location_restricted:
+            return queryset.filter(**{f"{field}__in": self.allowed_locations()})
+        return queryset.all()
+
+    def allowed_inventory_locations(self):
+        return self.allowed_locations()
 
 
 class SubscriptionPlan(models.Model):
@@ -432,6 +490,9 @@ class Printer(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UNKNOWN)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return self.name
+
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["business", "name"], name="uniq_business_printer")
@@ -514,6 +575,16 @@ class PaymentConnection(models.Model):
         SANDBOX = "sandbox", "Sandbox"
         PRODUCTION = "production", "Production"
 
+    class Verification(models.TextChoices):
+        PENDING = "pending", "Awaiting verification"
+        INCOMPLETE = "incomplete", "Configuration incomplete"
+        FAILED = "failed", "Verification failed"
+        AUTHENTICATED = "authenticated", "Provider authenticated"
+        EVIDENCE = "evidence", "QRIS evidence checked · approval required"
+        VERIFIED = "verified", "QRIS enabled"
+        EXTERNAL = "external", "Provider approval required"
+        DISCONNECTED = "disconnected", "New payments disabled"
+
     business = models.ForeignKey(
         Business, on_delete=models.CASCADE, related_name="payment_connections"
     )
@@ -522,6 +593,10 @@ class PaymentConnection(models.Model):
     merchant_id = models.CharField(max_length=120)
     credentials_ciphertext = models.TextField()
     verified_at = models.DateTimeField(null=True, blank=True)
+    verification_state = models.CharField(max_length=16, choices=Verification.choices, default=Verification.PENDING)
+    last_verification_at = models.DateTimeField(null=True, blank=True)
+    last_verification_result = models.CharField(max_length=240, blank=True)
+    approval_reference = models.CharField(max_length=120, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -539,6 +614,9 @@ class Category(models.Model):
     description = models.CharField(max_length=240, blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
 
     class Meta:
         ordering = ["sort_order", "name"]
@@ -562,6 +640,9 @@ class Product(models.Model):
     price = models.DecimalField(max_digits=12, decimal_places=2)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
 
     class Meta:
         constraints = [
@@ -665,12 +746,7 @@ class Promotion(models.Model):
             ZoneInfo(self.business.timezone_name)
         except (ZoneInfoNotFoundError, AttributeError):
             errors["business"] = "The business timezone must be a valid IANA timezone."
-        if self.permanent_offer:
-            self.start_date = None
-            self.end_date = None
-            self.starts_at = None
-            self.ends_at = None
-        else:
+        if not self.permanent_offer:
             if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
                 errors["ends_at"] = "The end timestamp must be after the start timestamp."
             if self.start_date and self.end_date and self.end_date < self.start_date:
@@ -893,6 +969,14 @@ class InventoryBalance(models.Model):
             ),
         ]
 
+    @property
+    def current_cost_estimate(self):
+        from .purchasing import line_amount
+
+        if self.last_purchase_unit_cost is None:
+            return None
+        return line_amount(self.quantity, self.last_purchase_unit_cost)
+
     def clean(self):
         if self.item_id and self.location_id and self.item.business_id != self.location.business_id:
             raise ValidationError("Inventory item and location must belong to the same business.")
@@ -1000,6 +1084,63 @@ class PurchaseReceiptLine(models.Model):
         ]
 
 
+class StockCount(models.Model):
+    balance = models.ForeignKey(InventoryBalance, on_delete=models.PROTECT, related_name="physical_counts")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT)
+    expected = models.DecimalField(max_digits=12, decimal_places=3)
+    counted = models.DecimalField(max_digits=12, decimal_places=3)
+    reason = models.CharField(max_length=240)
+    movement = models.OneToOneField("StockMovement", null=True, blank=True, on_delete=models.PROTECT)
+    idempotency_key = models.UUIDField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        constraints = [
+            models.UniqueConstraint(fields=("balance", "idempotency_key"), name="stock_count_idempotency"),
+            models.CheckConstraint(
+                condition=models.Q(expected__gte=0, counted__gte=0) & (
+                    models.Q(expected=models.F("counted"), movement__isnull=True)
+                    | (~models.Q(expected=models.F("counted")) & models.Q(movement__isnull=False))
+                ),
+                name="stock_count_matches_movement",
+            ),
+        ]
+
+    @property
+    def variance(self):
+        return self.counted - self.expected
+
+
+class SupplierReturn(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    purchase_line = models.ForeignKey(PurchaseOrderLine, on_delete=models.PROTECT, related_name="supplier_returns")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=22, decimal_places=2)
+    reason = models.CharField(max_length=240)
+    movement = models.OneToOneField("StockMovement", on_delete=models.PROTECT)
+    idempotency_key = models.UUIDField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("purchase_line", "idempotency_key"), name="supplier_return_idempotency",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0, unit_cost__gt=0, subtotal__gte=0),
+                name="supplier_return_valid_amounts",
+            ),
+        ]
+
+    @property
+    def reference(self):
+        return f"RT-{self.pk.hex[:12].upper()}"
+
+
 class AppendOnlyStockMovementQuerySet(models.QuerySet):
     def update(self, **kwargs):
         raise ValueError("Stock movements are append-only")
@@ -1022,6 +1163,8 @@ class StockMovement(models.Model):
         TRANSFER = "transfer", "Transfer"
         SALE = "sale", "Recipe consumption"
         RETURN = "return", "Order cancellation return"
+        COUNT = "count", "Physical stock count"
+        SUPPLIER_RETURN = "supplier_return", "Supplier return"
 
     business = models.ForeignKey(Business, on_delete=models.PROTECT, related_name="stock_movements")
     item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="movements")
@@ -1175,6 +1318,10 @@ class Order(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def payment_due(self):
+        return self.total > 0 and self.payment_status != self.PaymentStatus.PAID
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -1220,6 +1367,9 @@ class OrderLine(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     product_name = models.CharField(max_length=160)
+    sku_snapshot = models.CharField(max_length=80, null=True, blank=True)
+    category_snapshot_id = models.PositiveBigIntegerField(null=True, blank=True)
+    category_snapshot_name = models.CharField(max_length=100, null=True, blank=True)
     modifiers = models.JSONField(default=list, blank=True)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     base_unit_price = models.DecimalField(max_digits=12, decimal_places=2)
@@ -1318,11 +1468,16 @@ class PrintJob(models.Model):
 
 class PaymentTransaction(models.Model):
     class Status(models.TextChoices):
+        INITIATING = "initiating", "Confirmation pending"
+        REVIEW = "review", "Reconciliation required"
         PENDING = "pending", "Pending"
         PAID = "paid", "Paid"
         EXPIRED = "expired", "Expired"
         FAILED = "failed", "Failed"
         REFUNDED = "refunded", "Refunded"
+
+    COLLECTING_STATUSES = (Status.INITIATING, Status.PENDING)
+    TENDER_BLOCKING_STATUSES = (*COLLECTING_STATUSES, Status.REVIEW)
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.ForeignKey(
@@ -1348,6 +1503,12 @@ class PaymentTransaction(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def qr_available(self):
+        return self.status == self.Status.PENDING and self.expires_at > timezone.now() and bool(
+            self.qr_payload or self.qr_image_url
+        )
+
     class Meta:
         indexes = [
             models.Index(fields=["business", "status", "created_at"]),
@@ -1358,6 +1519,49 @@ class PaymentTransaction(models.Model):
                 fields=["business", "idempotency_key"], name="uniq_payment_tx_idempotency"
             )
         ]
+
+
+class OrderRefund(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Awaiting confirmation"
+        SUCCEEDED = "succeeded", "Refunded"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(Order, on_delete=models.PROTECT, related_name="refunds")
+    payment = models.ForeignKey(PaymentTransaction, null=True, blank=True, on_delete=models.PROTECT)
+    tender = models.ForeignKey(OrderTender, null=True, blank=True, on_delete=models.PROTECT)
+    actor = models.ForeignKey(User, null=True, on_delete=models.PROTECT)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reason = models.CharField(max_length=200)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    idempotency_key = models.UUIDField(default=uuid.uuid4)
+    provider_reference = models.CharField(max_length=120, blank=True)
+    last_submitted_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(default=timezone.now, db_index=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        constraints = [
+            models.UniqueConstraint(fields=("order", "idempotency_key"), name="order_refund_idempotency"),
+            models.UniqueConstraint(
+                fields=("payment", "provider_reference"), condition=~models.Q(provider_reference=""),
+                name="order_refund_provider_reference",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0) & (
+                    models.Q(tender__isnull=True, payment__isnull=False)
+                    | models.Q(tender__isnull=False, payment__isnull=True)
+                ),
+                name="order_refund_positive_amount_and_capture",
+            ),
+        ]
+
+    @property
+    def reference(self):
+        return f"RF-{self.pk.hex}"
 
 
 class AppendOnlyWebhookEventQuerySet(models.QuerySet):

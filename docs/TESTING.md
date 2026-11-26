@@ -1,104 +1,149 @@
-# Testing
+# Testing and verification
 
-## Identity cycle — 2026-11-17
+## Automated tests
 
-`manage.py test core --keepdb` passed **87 tests in 107.970 seconds** against PostgreSQL and Redis after migration 0019. Eight identity tests cover RSA/Authlib validation, PKCE/state replay, invalid signature/claims, explicit linking, enrollment/TOTP replay, recovery reuse, privileged enrollment, CSRF and Redis stream gating. The final full run includes session hardening: logout closed an existing stream on its next delivery.
-
-Actual Uvicorn/Chromium browser verification used a synthetic, nonprivileged account with an existing authenticator. Password sign-in reached MFA; invalid code showed an error; valid TOTP reached businesses. Account-security UI was inspected at desktop, 375px phone and 768px tablet. Expanded removal controls supported keyboard Tab; inputs measured 48px and phone content did not overflow horizontally. Local screenshot: `.scratch/account-security-browser.png`. The QA account was deactivated afterward. Live Google consent, physical authenticator scanning, screen-reader audit and production deployment remain unverified.
-
-## Environment and commands
-
-Use the project virtual environment, PostgreSQL 17 and Redis 7. Preserve development DB and named Docker volumes. Django creates/retains the separate `test_veyra` database with `--keepdb`.
+Run development services from [the quick start](../README.md#run-locally-on-windows). Use a local PostgreSQL role allowed to create test databases and a Redis instance isolated from staging/production. Django creates a separate ``test_<database-name>``, applies migrations to it, and normally removes it after the suite. Confirm the target environment before running tests.
 
 ```powershell
-docker compose up -d postgres redis
-.venv\Scripts\python.exe manage.py check
-.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
-.venv\Scripts\python.exe manage.py test core --keepdb
-.venv\Scripts\python.exe manage.py test core.test_account_recovery core.test_observability --keepdb
+.\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+.\.venv\Scripts\python.exe manage.py test --noinput
+.\.venv\Scripts\python.exe manage.py test core.test_ordering_builder --noinput
+.\.venv\Scripts\python.exe manage.py test core.test_audit_remediation --noinput
+.\.venv\Scripts\python.exe manage.py check_realtime
 ```
 
-Use `test core`, not only `test core.tests`: new modules are discovered alongside the original suite. SQLite mode is not verification for PostgreSQL/Redis production behavior.
+Use ``--keepdb`` only when intentionally reusing an isolated test database. Test modules are discovered across core. Targeting ``core.tests`` alone omits the separate test modules. The optional SQLite test switch uses in-memory database and Channels implementations and is appropriate only for quick checks without PostgreSQL or Redis requirements.
 
-## Strategy and evidence
+Use public HTTP and ASGI workflows for regressions where practical. Service-level tests cover domain invariants. PostgreSQL is important for real transaction and constraint behavior. Redis tests cover group delivery and stream authorization. The suite simulates remote providers or controlled failure conditions. Its results do not establish live provider acceptance.
 
-HTTP workflows are the agreed public seam for new regression coverage. Existing service-level tests remain. Channels communicators exercise ASGI/Redis authorization and event delivery. Mock only unavailable external boundaries or explicit fault injection; live readiness tests connect to actual PostgreSQL and Redis.
+## Browser workflow
 
-On 2026-11-17, the full discovered suite passed 79 tests in 131.267 seconds. Eight new tests cover resend/verification recovery, disabled-account replay, resend throttle/CSRF, real dependency readiness, simulated Redis failure, correlation headers and safe log formatting. A later focused run is required whenever these paths change. Earlier browser evidence on 2026-11-16 covers QR checkout/tracking and live repricing.
+Use the Uvicorn server, local PostgreSQL and Redis, and an active outbox worker. Use a test tenant with a product, signed ordering entry point, and a browser-accessible owner account. Use separate browser contexts for owner and guest to avoid sharing cookies. Exercise Chrome, Firefox and Playwright WebKit when a change affects rendering, focus or browser behavior. The optional Ordering Page Builder browser regression and disposable fixture launcher are checked in. The app has no npm runtime step. [Builder browser commands](ORDERING-PAGE-BUILDER.md#reproduce-the-browser-regression)
 
-Browser verification on 2026-11-17 used Uvicorn and the in-app Chromium browser. The login link opened the resend form; submitting an unknown synthetic address reached uniform confirmation without creating an account. The browser did not verify SMTP delivery or the eligible-account email path; automated HTTP tests cover the latter using Django's test mail backend.
+1. For a responsive audit, use widths 320, 375, 430, 768, 834, 1024, 1200 and 1440 CSS pixels. Check page-level overflow, table regions, client errors and keyboard focus. Inspect meaningful empty, validation, and success states.
+2. Open a signed guest menu in a separate context. Place an order and keep its tracking page open. Verify the independent Management queue and authorized guest update after transition or tender. Check reconnect and stock/purchase changes for workflows affected by the patch.
+3. For the builder, confirm unsaved edits appear only in the private preview. Save a draft, reload the editor and verify the guest page stays on the published design. Publish as owner, then open the real public link in a fresh context with no editor session and check computed styles again after reload. Check the signed table and takeaway links, live delivery, unpublish and restore. The browser regression also adds a second self-only stylesheet policy to public navigation and verifies a second business keeps its separate design.
+4. Distinguish local behavior, simulated transport, and actual hosted-provider acceptance. Record exact browser, width, route, action, result, and data or service limit. Check reduced motion and verify visible focus and meaningful status updates.
 
-## Gaps
+## Ordering Page Builder publication regression
 
-No full accessibility, load/concurrency, cross-browser, formal penetration, backup/restore or production deployment certification. Payments are mocked, physical printing is unverified, live Google consent and full factor-recovery acceptance are unverified, and full multi-device/domain synchronization remains incomplete. [FEATURE-STATUS.md](FEATURE-STATUS.md) tracks remaining product acceptance. A green suite cannot replace these checks.
+The regression verifies the actual signed table and takeaway links in four stages. It checks a saved private draft while the public design stays unchanged, a fresh anonymous visit after Publish, reload and real-time updates on a previously opened guest page, and unpublish followed by a separate fresh visit after restoring and republishing version 1. A second tenant publishes a different palette and has its own private draft. A failed cross-tenant preview request and repeated reads of the second tenant's guest menu confirm isolation.
 
-## Figma implementation cycle — 2026-11-18
+On 2026-11-26, 253 Django tests passed on PostgreSQL and Redis. The 33-case focused builder, cart and catalog run passed. Django's system and migration drift checks passed. The tests used isolated databases.
 
-- Django system check and migration consistency passed. Additive migrations `0020_product_image` and `0021_guest_cart` are applied locally.
-- `manage.py test core --keepdb` passed 104 tests in 56.616 seconds with PostgreSQL and Redis. HTTP tests cover session-isolated carts, checkout replay, QR links across locations, upload validation and guest revocation, banner boundaries, receipt snapshots and print job permissions and retry. Existing OIDC/MFA and authorized Channels regressions ran in the same suite.
-- Chrome with Playwright used a synthetic business against local Uvicorn and the outbox worker. Checks covered Settings keyboard navigation and responsive disclosure, catalog filtering, image preview/upload, banner editing via WebSocket, separate cart navigation and reload, a second independent guest context, checkout and private tracking, POS draft preservation on a live order event, synthetic cash tender, receipt preview, the 58mm selector, print-media output and Order History.
-- Chromium print-to-PDF produced page widths of 163.92pt and 227.04pt for 58mm and 80mm respectively. Physical print output, cross-browser assistive technology, and live payment provider processing remain unverified.
+The HTTP test deliberately diverges the old public fields from the active version and verifies that the public menu, logo and cover still resolve to that version. It checks the stylesheet's version, MIME type and cache policy, verifies that outdated URLs cannot cache refreshed CSS under the old key, and verifies that unpublishing removes the custom assets. The Playwright workflow asserts actual computed surfaces under a second content security policy that allows same-origin stylesheets. It also checks guest HTML and cart responses through their normal routes. Chrome, Firefox and Playwright WebKit passed the full regression and fit checks at 320, 375, 768, 1024 and 1440 CSS pixels. The fixture records actual numbered snapshots and four computed colors for each guest flow. No production proxy, CDN or hosted media service was exercised. [HTTP coverage](../core/test_ordering_builder.py) · [Browser fixture and commands](ORDERING-PAGE-BUILDER.md#reproduce-the-browser-regression)
 
-## Visual parity and guest takeaway — 2026-11-18
+## Evidence
 
-- The original 104-test baseline passed before changes. The final `manage.py test core --keepdb` run passed 110 tests in 74.217 seconds on PostgreSQL and Redis. Django system and migration consistency checks passed. Migration `0022_guest_takeaway` was applied locally.
-- New HTTP coverage exercises bounded cart edits and stale revisions, category promotion pricing in storefront and POS, permission-scoped enablement, dine-in QR to takeaway, no-table pickup, replay, private tracking, recipe stock consumption, station completion, paid receipts, signed mocked QRIS settlement and duplicate notification handling.
-- Chrome, Firefox and Playwright WebKit on Windows passed the synthetic workflow on local Uvicorn with the Redis outbox worker. Checks covered keyboard focus and Escape, pressed category buttons, 44px quantity controls, reduced-motion preference, no horizontal overflow at 320–1200px, checkout notes, the cashier's existing draft, payment and kitchen status over WebSockets, and receipt preview. Chrome also covered a deliberately disconnected guest tracking socket and measured both thermal print PDF widths.
-- Assistive technology, physical hardware, external QRIS sandbox credentials and production verification remain open.
+| Verification | Result |
+| --- | --- |
+| 2026-11-25 Ordering Page Builder functional audit | The PostgreSQL/Redis suite passed 231 tests before repair and 234 afterward. The 26-case focused suite covered builder, catalog and storage workflows. Chrome, Firefox and Playwright WebKit passed computed colors, media, responsive builder interactions, live publication, restoration and both signed checkout paths. Django checks and migration drift checks passed. [Builder evidence](ORDERING-PAGE-BUILDER.md#functional-audit-and-repair-2026-11-25) |
+| 2026-11-25 High-priority remediation | The clean pre-change baseline passed 215 tests. The final Windows suite passed 231 tests in 241.296 seconds, including 16 new cases, with PostgreSQL and Redis. Django checks and migration drift checks passed on isolated databases. Migration 0038 applied to the fixtures. |
+| Recovery and concurrency checks | A disposable Redis container was stopped and restarted between separate outbox worker processes. The failed event was retried and two guest sockets received the current order and payment state. Eight PostgreSQL tests raced staff completion with tender in an isolated fixture. A separate in-flight station revocation withheld the QR while preserving its attempt. |
+| Targeted remediation browser checks | Chrome, Firefox and Playwright WebKit passed independent guest and staff checks for responsive QR menu and checkout, POS tender, the kitchen completion gate, live handoff, guest reconnect, receipt, and report. Viewport checks sampled 320 to 1440 CSS pixels with no console errors in the final runs. Chrome also checked live stock after partial receiving and generated 58/80 mm receipt PDFs. A separate Chrome check completed cross-browser signup verification and password validation at 320 CSS pixels using local console mail. |
+| Rebuilt Linux image | Python 3.12.16, Django 6.1.3, cryptography 50.0.2 and pip 26.2.1. Package consistency, Django checks, real Channels group delivery, and 22 targeted checkout, refund and account tests passed. OSV matched zero among 39 PyPI and GSAP queries for the final image inventory and zero among 78 for the Windows environment. The packages scan did not assess the Linux OS. |
+| 2026-11-25 documentation review | 215 tests passed in 280.438 seconds against PostgreSQL 17.12 and Redis 7.4.12, using Python 3.14.7 and Django 6.1.3. The separately named Django test database was created for the run and removed by Django. |
+| Setup and runtime checks | Clean editable installs with the development extra on Windows and in the Linux release image passed. Django checks, migration drift and plan, local PostgreSQL/Redis, and Channels group delivery passed. An isolated test database exercised migration, admin creation and all three worker commands. The production-mode local image served manifest CSS, readiness and HSTS. Django reported the HSTS preload advisory (`security.W021`). |
+| Current public ASGI smoke | Chrome, Firefox, and Playwright WebKit each checked the landing, sign-in, and registration pages at 375 CSS pixels. All three rendered the expected heading with no page overflow or uncaught page errors. The HTTP smoke also checked liveness, readiness and development static CSS. |
+| 2026-11-25 UI polish handoff | 215 tests before and after. Chrome, Firefox, and Playwright WebKit passed 912 settled checks across 38 routes and eight widths. Recorded browser workflows included publishing, live orders, payment, refund and kitchen state. This is dated browser evidence for the UI polish pass. |
+| Browser and accessibility acceptance | Targeted keyboard, text contrast, touch targets, and reduced-motion checks exist. Full screen-reader sessions, physical devices, printers, hosted providers, and independent assurance remain open. |
 
-## Product modifiers — 2026-11-20
+[UI handoff](UI-DESIGN-HANDOFF.md) · [Release evidence history](RELEASE-HISTORY.md) · [Feature inventory](FEATURE-STATUS.md)
 
-- The pre-change PostgreSQL and Redis baseline passed 110 tests. The full suite after the order and API changes passed 117 tests in 135.418 seconds. The modifier regressions use the HTTP seam for catalog permissions, location and product scope, required and repeated choices, cart edits, stale quotes, multiple POS configurations, paired station use and historical receipts.
-- Chrome, Firefox and Playwright WebKit passed the synthetic workflow against local Uvicorn, PostgreSQL, Redis and the outbox worker. Chrome additionally verified live modifier repricing with active selections in the guest menu and POS, resetting a removed option without clearing the draft quantity, and produced customized receipt PDFs measuring 163.92 pt at 58 mm and 227.04 pt at 80 mm. The existing plain-product takeaway workflow also passed in Chrome, including checkout, a live tracking reconnect and payment through kitchen completion.
-- Standard Django and migration consistency checks passed, and `0023_product_modifiers` is applied locally. Django's deployment check with debugging disabled reported `security.W021` for HSTS preload.
-- Zero verified sandbox merchant connections and zero physical device print queues were available. The browser and local API evidence cover the exercised workflows. Assistive-technology, physical device and external provider acceptance remain open.
+## Priority 0 implementation 2026-11-26
 
-## Design freeze and vouchers — 2026-11-20
+Baseline on `update` at `698ea190a7c799821d5c46bd0502893d5dd2194d` passed 234 tests in 177.853 seconds before code edits. The first launch reached database setup before Docker was available. The clean rerun used PostgreSQL 17.12 and Redis 7.4.12. The same services, with verified Windows loopback bindings, ran the final suite against a disposable database. Existing regression coverage was retained. The format-check test now asserts the intentionally corrected eligibility behavior.
 
-- The baseline was 117 tests against PostgreSQL and Redis. The final full suite passed 125 tests in 86.474 seconds, including eight voucher tests. Django checks and migration consistency passed. Migration 0024_vouchers is applied locally.
-- The voucher suite exercises public cart, POS, manager, payment, report and receipt routes. It checks authorization, cross-tenant isolation, Redis code rate limits, monetary calculations, checkout replay and two actual PostgreSQL transactions competing for one redemption. A mocked Midtrans transport covers pending, failed, expired and settled amounts and duplicate callbacks. The paired station API test verifies acknowledged receipt reprints after a voucher edit.
-- Browser QA uses a synthetic merchant with local Uvicorn, PostgreSQL, Redis and the outbox worker. The design polish check used keyboard input and desktop, tablet and phone viewports.
-- The production-mode Django check with an ephemeral secret reported security.W021 for HSTS preload. Production security acceptance remains open.
+| Area | Verified locally |
+| --- | --- |
+| Final Django suite | **252 passed in 212.609 seconds**, with zero failures or skips, using PostgreSQL 17.12, Redis 7.4.12 and Django 6.1.3. |
+| Authorization | HTTP branch and tenant scope, POS submitted IDs, role and workspace restrictions, tender, station screen, cross-location event delivery and owner offboarding. Idle staff and guest WebSockets close after revocation or expiry. [Regressions](../core/test_priority_location_access.py) |
+| Midtrans and merchant gating | Tenant and platform callbacks use separate signing credentials. Tests cover missing, invalid and mismatched signatures, an unknown reference, duplicate delivery and stale payment transitions. Read-only verification checks tenant merchant, environment, QRIS and signature evidence. Core API Write and hosted callback approval are separate. BCA stays gated. [Signature regressions](../core/test_priority_payment_signatures.py) · [Readiness regressions](../core/test_priority_merchant_readiness.py) |
+| Account recovery | Provider timeout, durable retries, an interrupted sending lease, permanent rejection, uniform signup and resend responses, duplicate prevention, expiry and one-time activation. Resend API requests are simulated at the transport boundary. [Mail regressions](../core/test_priority_account_mail.py) |
+| Historical sales | PostgreSQL tests cover recategorization, rename, deletion, SKU preservation, date filtering and the legacy unknown bucket. Paid totals remain intact. [Report regressions](../core/test_priority_category_history.py) |
+| Browser | Installed Chrome, Firefox and Playwright WebKit passed signup, resend, merchant configuration and responsive width checks at 320, 390, 768 and 1440 CSS pixels. All three engines passed the Ordering Page Builder workflow with live publication, media, restore and signed table and pickup checkout. [Priority workflows](../tests/browser/priority-workflows.cjs) · [Builder workflow](../tests/browser/ordering-builder.cjs) |
+| Disposable Linux staging | PostgreSQL 17.12, Redis 7.4.12, Python 3.12.16 and the non-debug ASGI image. The migration service and four workers started under supervision. Dependency and operational checks passed. A stopped outbox heartbeat expired and returned after restart. A queued event committed while it was stopped was published after restart. Test load exposed false health failures at eight seconds. With an 18-second timeout all services stayed healthy during subsequent 51-second observation. The forwarded HTTPS, HSTS, secure session and CSRF cookies, Host, Origin and hashed static responses were exercised. `check --deploy` reported W021 for HSTS preload only. |
+| Recovery | Disposable snapshot and restore passed in 11.42 seconds including synthetic seeding. Restored order total and normalized private media digest matched. Owner media access worked and a different tenant was denied. One payment bundle and two MFA secrets decrypted with retained keys. Removing the old payment key caused the expected check failure. Hosted storage replication and RPO/RTO require external acceptance. [Fixture](../tests/recovery/staging_fixture.py) · [Procedure](DEPLOYMENT.md#backup-and-restore) |
+| Release image | Linux amd64 candidate `sha256:cf9015529eef47e2d7a850e72b2f892e0f579088ed19df515f97618b52de1ae9`. Package integrity passed. OSV matched zero of 39 PyPI packages and 20 of 61 Debian source packages. Applicability and available OS patches remain release review items. [OSV query API](https://google.github.io/osv.dev/post-v1-querybatch/) |
 
-Chrome, Firefox and Playwright WebKit passed the voucher flow at 320, 834 and 1200 px. Checks included creation, activation, invalid-code feedback, apply/remove, stepper changes without losing checkout instructions, live merchant changes in guest and POS drafts, guest counter payment over WebSockets, and both receipt preview widths. Chrome generated PDFs with measured widths of 163.92 pt and 227.04 pt. The local database had no verified sandbox merchant connections or active printers.
+Migrations `0039_merchant_readiness_and_verification_mail` and `0040_historical_order_line_classification` applied in disposable PostgreSQL and passed migration drift checks. The first retains the timestamps of prior format checks while clearing legacy QRIS eligibility. The second keeps genuine unknowns in historical lines without inventing categories.
 
-Chrome also passed the plain-price takeaway regression with keyboard navigation, live pickup tracking, tender, kitchen completion and receipt preview. The synthetic browser user, location, table and QA vouchers were deactivated after checks. Historical orders and audit records were retained.
+Provider sandbox and live settlement, hosted TLS/WSS and alert delivery, approved SMTP/Resend delivery, production backup retention, hosted Supabase and physical printer/device acceptance remain separate. The candidate image and recovery tests used synthetic data. The normal development database was neither migrated nor reset during this work.
 
-## Supplier purchasing — 2026-11-20
+### Files changed in Priority 0
 
-- The final PostgreSQL 17 and Redis 7 suite passed 133 tests in 147.499 seconds. Eight purchasing tests cover supplier access and history, draft pricing and transitions, transactional receiving, cancellation, exact replay, over-receipt and overflow protection, concurrent deliveries and authorized Channels delivery. Django reported no issues or migration drift. Local PostgreSQL has both additive migrations applied.
-- Chrome, Firefox and Playwright WebKit passed the supplier and purchase workflow through local Uvicorn, PostgreSQL, Redis and the outbox worker. Checks exercised supplier add/edit/deactivate and purchase history, multi-line draft creation and editing, submission, rejected over-receipts, partial and full receiving, and automatic stock, order-list and detail updates. The purchasing routes denied cross-tenant purchase IDs.
-- Receiving fit 320, 375, 834 and 1200 px. Keyboard activation added and focused a draft item field. Chrome handset and tablet captures were reviewed against the existing [Figma Inventory reference](https://www.figma.com/design/6tzk8TqeeQMTAkWFZ45JP3?node-id=3-2186). Production and assistive-technology verification remain open.
+Compared with the intake working tree on `update`, which had 156 existing changed or untracked paths. The migration records and the following paths are the only changes made in this pass. No files were staged or committed.
 
-Chrome also verified the owner-managed inventory location grant, the restricted stock list, denial of a direct purchase URL, and destination options limited to the granted location. Supplier list, purchase list, draft and purchase detail fit 320, 834 and 1200 px. Purchase tables scroll inside a labeled region on smaller screens.
+**Modified (49)**
 
-## Soft Premium Veyra and platform billing — 2026-11-20
+- `.env.example`
+- `README.md`
+- `compose.yaml`
+- `config/settings.py`
+- `core/billing_gateway.py`
+- `core/catalog_views.py`
+- `core/consumers.py`
+- `core/device_views.py`
+- `core/email_backend.py`
+- `core/forms.py`
+- `core/identity.py`
+- `core/management/commands/process_billing.py`
+- `core/management/commands/process_outbox.py`
+- `core/management/commands/process_refunds.py`
+- `core/media_views.py`
+- `core/models.py`
+- `core/modifier_views.py`
+- `core/ordering_views.py`
+- `core/payments/midtrans.py`
+- `core/permissions.py`
+- `core/pricing.py`
+- `core/purchasing.py`
+- `core/purchasing_views.py`
+- `core/receipt_views.py`
+- `core/receipts.py`
+- `core/services.py`
+- `core/templatetags/navigation.py`
+- `core/tests.py`
+- `core/views.py`
+- `core/voucher_views.py`
+- `docs/AUDIT-REMEDIATION.md`
+- `docs/DEPLOYMENT.md`
+- `docs/DEVELOPMENT.md`
+- `docs/ENVIRONMENT.md`
+- `docs/FEATURE-IMPLEMENTATION-REGISTER.md`
+- `docs/FEATURE-STATUS.md`
+- `docs/OPERATIONS.md`
+- `docs/PAYMENTS.md`
+- `docs/PRODUCT-FEATURE-AUDIT.md`
+- `docs/PRODUCT-ROADMAP.md`
+- `docs/SECURITY.md`
+- `docs/TESTING.md`
+- `templates/core/catalog.html`
+- `templates/core/inventory_access.html`
+- `templates/core/locations.html`
+- `templates/core/payments.html`
+- `templates/core/registered.html`
+- `templates/core/reports.html`
+- `templates/core/team.html`
 
-- The full suite passed **143 tests in 78.897 seconds** against PostgreSQL 17 and Redis 7. It includes the existing 133-test baseline and ten billing tests. Django system checks passed, no migration drift was detected, and migrations `0027_platform_billing` and `0028_bill_checkout_anchor` are applied to the local development database.
-- Billing tests exercise owner and cross-tenant access checks, CSRF, Django admin plan publication and retirement, audited restriction and restoration, trial eligibility and expiry, original price and trial snapshots, renewal and grace, downgrade limits, cancellation, and recovery. The suite tests forged and replayed notifications, authoritative amount verification, a lost checkout response, PostgreSQL concurrent invoice creation, and owner-only ASGI delivery through Redis.
-- Chrome, Firefox and Playwright WebKit verified the refined app shell, Overview, POS, Inventory, purchase details, Vouchers and Settings at 320, 834 and 1200 px. The checks covered keyboard focus and Escape, a reduced-motion preference, quantity changes and responsive layout. Chrome rechecked partial receiving, validation, live stock, plain-product takeaway, kitchen status and receipt PDF widths after the shared CSS changes.
-- All three engines exercised new trial and expired-subscription conversion, plan comparison, invoice history, hosted checkout redirect, a failed payment and retry, live payment updates in two open tabs, upgrade and downgrade scheduling, and cancellation and resumption. Billing and invoices fit at 320, 834 and 1200 px. Chrome also exercised read-only billing and recovery guidance under a platform restriction at 320 px. Phone and desktop billing captures were reviewed. Full assistive-technology acceptance remains open.
-- Checkout used real local ASGI, PostgreSQL, Redis and the outbox worker with a mocked Midtrans transport. No dedicated platform merchant credentials or published non-QA paid plans were available locally. Merchant sandbox acceptance, public HTTPS webhook delivery, live settlement and production worker deployment remain unverified. The production-mode Django check reported the HSTS preload setting warning (security.W021). Synthetic QA accounts and paid plans were deactivated and their history was retained.
+**Added (18)**
 
-## Promotion target selection — 2026-11-21
-
-The full suite passed **146 tests** on PostgreSQL and Redis. The three new HTTP regressions cover name rendering, multiple saved IDs, removal and clearing, bound form recovery after an invalid percentage, existing inactive targets, invalid and cross-tenant IDs, catalog permissions, and CSRF. Django system checks passed and the migration check reported no drift.
-
-Chrome, Firefox and Playwright WebKit passed the promotion picker workflow at 320, 834 and 1200 px against local ASGI, PostgreSQL and Redis. Checks covered case- and accent-insensitive search, a 165-product catalog, empty catalogs and results, arrow keys, Home, End, Enter, Space, Tab, Escape, click-away, chip removal, clear all, posted IDs, validation recovery and edit persistence. Chrome also verified the native named-select fallback with JavaScript disabled. Desktop and phone captures were reviewed against the field mockup and the existing Veyra form. Screen-reader device testing remains open.
-
-## Product-wide UI polish — 2026-11-21
-
-- PostgreSQL 17 and Redis 7 baseline passed 146 tests. The final `manage.py test core --keepdb` run passed **148 tests in 129.802 seconds**, including two HTTP regressions for expired and completed password resets. Django system checks passed and `makemigrations --check --dry-run` reported no changes.
-- Chrome, Firefox, and Playwright WebKit checked **42 representative routes per engine** at 320, 834, and 1200 CSS px against local Uvicorn ASGI, PostgreSQL, and Redis. Checks verified expected HTTP responses, layout fit, and JavaScript page errors. They found no page-level horizontal overflow or uncaught page errors in the final matrix. Intended horizontal scrolling stays inside labeled tables. Selected Chrome captures from before and after the fixes were reviewed at phone and desktop widths, including landing, account, workspace, POS, inventory, purchases, campaign forms, and the storefront.
-- Keyboard and pointer checks in all three engines exercised password visibility, registration error focus, expired reset recovery, pending submit feedback, MFA recovery, mobile navigation and order table focus, POS search and quantities, promotion and voucher target pickers, report filters, the receiving shortcut, Kitchen and Bar synchronization, billing navigation, and guest checkout through placing an order. Chrome also completed email verification and a password change from a valid reset link, then verified desktop GSAP enhancement and in-session reduced-motion cleanup. Narrow reduced-motion checks confirmed the landing video was not requested.
-- At 375 px, Chrome dismissed a purchase cancellation and then received a partial-delivery update from another tab without reloading. A separate two-tab Chrome check dismissed the billing confirmation and then observed both cancellation and renewal resumption over Redis-backed WebSockets. At 1440 px Chrome scrubbed the paused, muted landing film forward and backward, then removed the active video source when reduced motion was enabled. The synthetic accounts and guest entry points were deactivated after verification and their history was retained.
-- Checked the shared input boundary and hint colors against warm surfaces at 3.37:1 and 6.01:1 respectively. These checks cover selected states. A complete assistive-technology pass, browser testing on physical devices, and production Google, SMTP, payment provider, printer and deployment checks remain open.
-
-## Catalog and ordering page — 2026-11-21
-
-- The pre-change baseline passed **148 tests in 206.356 seconds** on PostgreSQL 17 and Redis 7. The full regression suite then passed **158 tests in 227.049 seconds**. Django system and migration consistency checks passed. Migrations 0029–0031 applied to the local PostgreSQL development database.
-- Ten new HTTP tests cover categorized product creation, category search and ordering, reassignment and guest visibility, safe deletion, cross-business IDs, denied staff mutations and CSRF. Media cases exercise upload, replacement, removal, retention, invalid and oversized assets, guest image rendering and banner changes through a current signed QR link.
-- Chrome, Firefox and Playwright WebKit exercised the catalog and ordering page at 320, 834 and 1200 CSS px against local ASGI, PostgreSQL, Redis and the outbox worker. Checks used the actual management forms for category changes, photo and banner previews, replacement, deletion and removal. The browser runs also checked a failed image load, a draft quantity in live POS, the cart photo changing without losing its instructions, isolated table and takeaway carts, and counter checkout. Table and takeaway menus received appearance changes without a reload.
-- Reviewed selected 320 and 834 px Chrome captures. File previews were constrained to their form after the initial responsive run found overflow. After restarting the local ASGI process, new HTTP clients received the same WebP bytes from both media routes for all three browser fixtures. The database and Docker volumes stayed in place.
-- Chrome confirmed a campaign banner could be previewed, activated, used to locate its target product, and deactivated without changing the general ordering page banner. The final 320 px check kept the currency symbol and amount together. After verification, six isolated QA accounts and their ordering links were deactivated. Order and audit history were retained.
-- Production storage, backup and restore, and assistive-technology testing remain open.
+- `compose.staging.yaml`
+- `core/account_mail.py`
+- `core/management/commands/approve_tenant_qris.py`
+- `core/management/commands/check_operational_queues.py`
+- `core/management/commands/check_recovery_keys.py`
+- `core/management/commands/check_staging_web.py`
+- `core/management/commands/check_worker.py`
+- `core/management/commands/process_account_mail.py`
+- `core/migrations/0039_merchant_readiness_and_verification_mail.py`
+- `core/migrations/0040_historical_order_line_classification.py`
+- `core/test_priority_account_mail.py`
+- `core/test_priority_category_history.py`
+- `core/test_priority_location_access.py`
+- `core/test_priority_merchant_readiness.py`
+- `core/test_priority_payment_signatures.py`
+- `core/workers.py`
+- `tests/browser/priority-workflows.cjs`
+- `tests/recovery/staging_fixture.py`

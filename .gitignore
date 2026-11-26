@@ -13,3 +13,5 @@ media/
 .scratch/
 .scratch-*.log
 .caveman
+db.sqlite3
+*.sqlite3

@@ -1,0 +1,23 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}{% block error_title %}{% endblock %} — Veyra{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'core/account.css' %}">{% endblock %}
+{% block public_header %}{% include "core/account_header.html" %}{% endblock %}
+{% block site_footer %}{% include "core/account_footer.html" %}{% endblock %}
+{% block content %}
+<section class="account-layout account-state" aria-labelledby="error-heading">
+  <header class="account-lead">
+    <h1 id="error-heading">{% block error_heading %}{% endblock %}</h1>
+    <p>{% block error_description %}{% endblock %}</p>
+  </header>
+  <div class="account-form-area">
+    {% block error_action %}
+      {% if request.user.is_authenticated %}
+        <a class="button button-dark" href="{% url 'workspace_home' %}">Back to your businesses</a>
+      {% else %}
+        <a class="button button-dark" href="{% url 'home' %}">Back to Veyra</a>
+      {% endif %}
+    {% endblock %}
+  </div>
+</section>
+{% endblock %}

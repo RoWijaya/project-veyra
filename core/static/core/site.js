@@ -10,18 +10,22 @@ document.addEventListener("DOMContentLoaded", () => {
     const connect = () => {
       if (stopped) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/guest/orders/${tracking.dataset.orderId}/`);
-      socket.addEventListener("open", () => {
+      const connection = new WebSocket(`${protocol}//${window.location.host}/ws/guest/orders/${tracking.dataset.orderId}/`);
+      socket = connection;
+      connection.addEventListener("open", () => {
+        if (stopped || socket !== connection) return;
         retryDelay = 1000;
         if (connectionStatus) connectionStatus.textContent = "Live updates connected";
       });
-      socket.addEventListener("message", (message) => {
+      connection.addEventListener("message", (message) => {
+        if (stopped || socket !== connection) return;
         try {
           const event = JSON.parse(message.data);
           if (event.event_id && event.event !== "snapshot") {
             if (seenEvents.has(event.event_id)) return;
             seenEvents.add(event.event_id);
           }
+          tracking.dataset.paymentNeedsReview = String(event.payment_needs_review === true);
           const orderStatus = tracking.querySelector("[data-order-status]");
           const paymentStatus = tracking.querySelector("[data-payment-status]");
           const paymentMethod = tracking.querySelector("[data-payment-method]");
@@ -31,12 +35,23 @@ document.addEventListener("DOMContentLoaded", () => {
           if (paymentStatus && paymentLabels[event.payment_status]) paymentStatus.textContent = paymentLabels[event.payment_status];
           const paymentMethods = { counter: "Pay at counter", qris: "QRIS", cash: "Cash", card: "Card" };
           if (paymentMethod && paymentMethods[event.payment_method]) paymentMethod.textContent = paymentMethods[event.payment_method];
+          const paymentPending = tracking.querySelector("[data-guest-payment-pending]");
+          if (paymentPending && (event.payment_status !== "pending" || event.status === "cancelled")) {
+            paymentPending.hidden = true;
+          }
+          const refund = tracking.querySelector("[data-guest-refund]");
+          if (refund && event.refunded_amount != null && event.total != null) {
+            const amount = Number(event.refunded_amount);
+            refund.hidden = amount <= 0;
+            refund.querySelector("strong").textContent = amount >= Number(event.total) ? "Fully refunded" : "Partially refunded";
+            refund.querySelector("span").textContent = amount.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
         } catch (error) {
           // Ignore malformed frames; the server-rendered order remains visible.
         }
       });
-      socket.addEventListener("close", (event) => {
-        if (stopped) return;
+      connection.addEventListener("close", (event) => {
+        if (stopped || socket !== connection) return;
         if (event.code === 4403) {
           if (connectionStatus) connectionStatus.textContent = "Live updates unavailable";
           return;
@@ -51,7 +66,13 @@ document.addEventListener("DOMContentLoaded", () => {
       stopped = true;
       window.clearTimeout(retryTimer);
       socket?.close();
-    }, { once: true });
+    });
+    window.addEventListener("pageshow", (event) => {
+      if (!event.persisted) return;
+      stopped = false;
+      seenEvents.clear();
+      connect();
+    });
   }
 
   const inventory = document.querySelector("[data-inventory-stream]");
@@ -74,6 +95,11 @@ document.addEventListener("DOMContentLoaded", () => {
           if (cost && event.last_purchase_unit_cost != null) {
             cost.hidden = false;
             cost.querySelector("span").textContent = Number(event.last_purchase_unit_cost).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
+          const estimate = inventory.querySelector(`[data-inventory-estimate][data-item-id="${CSS.escape(event.item_id)}"][data-location-id="${CSS.escape(event.location_id)}"] span`);
+          if (estimate && Object.hasOwn(event, "current_cost_estimate")) {
+            estimate.textContent = event.current_cost_estimate === null ? "Cost unavailable" :
+              `Rp ${Number(event.current_cost_estimate).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
           }
           if (balance) balance.textContent = `${Number(event.quantity).toLocaleString("id-ID", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} ${balance.dataset.unit}`;
         } catch (error) { /* Ignore malformed frames. */ }
@@ -217,8 +243,11 @@ document.addEventListener("DOMContentLoaded", () => {
     gsap.from(hero.querySelectorAll(".landing-hero-heading > *, .landing-hero-detail > *"), {
       y: 12, opacity: .35, duration: .5, stagger: .05, ease: "power2.out",
     });
+    gsap.from(hero.querySelector(".landing-product-figure"), {
+      y: 14, opacity: .7, duration: .65, ease: "power2.out",
+    });
     if (!ScrollTrigger) return;
-    document.querySelectorAll(".reveal").forEach((section) => {
+    document.querySelectorAll(".reveal, [data-story-chapter]").forEach((section) => {
       gsap.from(section, {
         y: 12, opacity: .7, duration: .5, ease: "power2.out",
         scrollTrigger: { trigger: section, start: "top 93%", once: true },
@@ -229,12 +258,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const story = document.querySelector("[data-cinematic-story]");
   if (story && ScrollTrigger) {
     media.add("(min-width: 900px) and (min-height: 660px) and (prefers-reduced-motion: no-preference)", () => {
-      const stage = story.querySelector("[data-story-stage]");
-      const chapters = Array.from(story.querySelectorAll("[data-story-chapter]"));
-      const progress = story.querySelector("[data-story-progress]");
+      const scene = story.querySelector(".story-visual");
       const film = story.querySelector("[data-story-film]");
       const filmStatus = story.querySelector("[data-film-status]");
-      if (!stage || chapters.length < 2) return;
+      if (!scene || !film) return;
 
       const startTime = 0.35;
       let latestProgress = 0;
@@ -244,35 +271,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const time = startTime + (film.duration - startTime) * latestProgress;
         if (Math.abs(film.currentTime - time) > 0.04) film.currentTime = time;
       };
-      story.classList.add("cinema-enhanced");
-      const segment = 0.92 / (chapters.length - 1);
-      const timeline = gsap.timeline({
-        scrollTrigger: {
-          trigger: story,
-          start: "top top",
-          end: "bottom bottom",
-          pin: stage,
-          scrub: true,
-          anticipatePin: 1,
-          invalidateOnRefresh: true,
-        },
-      });
-      gsap.set(chapters, { opacity: 0, y: 16 });
-      gsap.set(chapters[0], { opacity: 1, y: 0 });
-      chapters.forEach((chapter, index) => {
-        const position = index * segment;
-        if (index > 0) {
-          timeline.fromTo(chapter, { opacity: 0, y: 16 }, {
-            opacity: 1, y: 0, duration: 0.055, ease: "power3.out",
-          }, position);
-        }
-        if (index < chapters.length - 1) {
-          timeline.to(chapter, { opacity: 0, y: -16, duration: 0.055, ease: "power2.in" }, position + segment - 0.055);
-        }
-      });
-
-      if (progress) timeline.to(progress, { scaleX: 1, ease: "none", duration: 1 }, 0);
-
       let observer;
       let videoTrigger;
       const controller = new AbortController();
@@ -291,9 +289,9 @@ document.addEventListener("DOMContentLoaded", () => {
           }, { once: true, signal: controller.signal });
           film.addEventListener("loadeddata", () => {
             videoTrigger = ScrollTrigger.create({
-              trigger: story,
-              start: "top top",
-              end: "bottom bottom",
+              trigger: scene,
+              start: "top bottom",
+              end: "bottom top",
               onUpdate: (trigger) => seekFilm(trigger.progress),
             });
             seekFilm(videoTrigger.progress);
@@ -333,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
               loadFilm();
             }
           }, { rootMargin: "180px 0px" });
-          observer.observe(story);
+          observer.observe(scene);
         } else {
           loadFilm();
         }
@@ -352,7 +350,6 @@ document.addEventListener("DOMContentLoaded", () => {
           source.removeAttribute("src");
         });
         film?.load();
-        story.classList.remove("cinema-enhanced");
       };
     });
   }

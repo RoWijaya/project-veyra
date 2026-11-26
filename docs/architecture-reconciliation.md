@@ -1,4 +1,6 @@
-# Veyra architecture reconciliation
+# Historical architecture reconciliation
+
+This decision record describes the transition from the role-based pilot schema. Its payment rows describe what existed when that decision was made. Current provider and workflow status is in [architecture](ARCHITECTURE.md), [payments](PAYMENTS.md), and [feature status](FEATURE-STATUS.md).
 
 | Area | Existing implementation | Decision |
 | --- | --- | --- |

@@ -21,32 +21,37 @@
 {% endblock %}
 {% block content %}
 <section class="landing-hero landing-shell" data-landing-hero aria-labelledby="landing-title">
-  <div class="landing-hero-heading">
-    <p class="eyebrow">POINT OF SALE &amp; BUSINESS OPERATIONS</p>
-    <h1 id="landing-title">Everything<br><em>in sync.</em></h1>
-  </div>
-  <div class="landing-hero-detail">
-    <p class="landing-lede">Take orders, track stock, and run service from one workspace.</p>
-    <p class="landing-audience">For cafés, restaurants, bakeries, and shops.</p>
-    <div class="landing-actions">
-      {% if request.user.is_authenticated %}<a class="button button-dark" href="{% url 'workspace_home' %}">Open your workspace</a>
-      {% else %}<a class="button button-dark" href="{% url 'register' %}">Create an account</a>{% endif %}
-      <a class="landing-text-link" href="#product">Explore the product <span aria-hidden="true">↓</span></a>
+  <div class="landing-hero-copy">
+    <div class="landing-hero-heading">
+      <p class="eyebrow">POINT OF SALE &amp; BUSINESS OPERATIONS</p>
+      <h1 id="landing-title">Everything<br><em>in sync.</em></h1>
     </div>
-  </div>
-</section>
-<section id="product" class="landing-showcase landing-shell" aria-label="Veyra point of sale">
-  <figure class="landing-product-figure">
-    <div class="landing-product-stage">
-      {% if landing_poster %}<img class="landing-scene" src="{{ landing_poster }}" alt="" width="1920" height="1080"{% if not request.user.is_authenticated %} fetchpriority="high"{% endif %}>{% endif %}
-      <div class="landing-product-frame">
-        <div class="landing-product-toolbar"><strong>Veyra</strong><span>Orders &amp; POS</span></div>
-        <img src="{% static 'core/landing/veyra-pos-example.png' %}" width="660" height="587" alt="Veyra POS showing an order type, catalog search, category filters, and selected quantities" decoding="async">
+    <div class="landing-hero-detail">
+      <p class="landing-lede">Take orders, track stock, and run service from one workspace.</p>
+      <p class="landing-audience">For cafés, restaurants, bakeries, and shops.</p>
+      <div class="landing-actions">
+        {% if request.user.is_authenticated %}<a class="button button-dark" href="{% url 'workspace_home' %}">Open your workspace</a>
+        {% else %}<a class="button button-dark" href="{% url 'register' %}">Create an account</a>{% endif %}
+        <a class="landing-text-link" href="#product">Explore the product <span aria-hidden="true">↓</span></a>
       </div>
     </div>
-    <figcaption>Veyra point of sale <span>Example workspace</span></figcaption>
+  </div>
+  <figure class="landing-product-figure" aria-labelledby="showcase-caption">
+    <div class="landing-product-stage">
+      {% if landing_poster %}<img class="landing-scene" src="{{ landing_poster }}" alt="" width="1920" height="1080" decoding="async">{% endif %}
+      <div class="landing-product-frame">
+        <div class="landing-product-toolbar"><strong>Veyra</strong><span>Orders &amp; POS</span></div>
+        <img src="{% static 'core/landing/veyra-pos-example.png' %}" width="674" height="534" alt="Veyra POS showing an order type, catalog search, category filters, and selected quantities" fetchpriority="high" decoding="async">
+      </div>
+    </div>
+    <figcaption id="showcase-caption">Veyra point of sale <span>Example workspace</span></figcaption>
   </figure>
 </section>
+<dl id="product" class="landing-service-overview landing-shell">
+  <div><dt><a href="#operations">Take orders <span aria-hidden="true">↗</span></a></dt><dd>POS, table QR and takeaway</dd></div>
+  <div><dt><a href="#preparation">Prepare and hand off <span aria-hidden="true">↗</span></a></dt><dd>Live queues for kitchen and bar</dd></div>
+  <div><dt><a href="#inventory-tour">Track stock <span aria-hidden="true">↗</span></a></dt><dd>Balances and deliveries by location</dd></div>
+</dl>
 <section id="operations" class="landing-operations landing-shell" aria-labelledby="operations-title">
   <header class="landing-operations-lead reveal">
     <p class="eyebrow">ORDERS &amp; SERVICE</p>
@@ -74,18 +79,17 @@
     <div class="story-chapters">
       <article class="story-chapter" data-story-chapter>
         <div><p class="story-kicker">WORKSPACE</p><h2>One account.<br><em>Every business.</em></h2><p>Keep each business’s catalog, locations, permissions, and orders in its own workspace.</p></div>
-        <figure class="tour-product"><img src="{% static 'core/landing/veyra-pos-example.png' %}" width="660" height="587" alt="Veyra point of sale with a sample catalog" loading="lazy" decoding="async"><figcaption>Point of sale · Example workspace</figcaption></figure>
+        <ul class="tour-capabilities"><li>Manage menus and locations</li><li>Control staff access by business</li><li>Review sales and order history</li></ul>
       </article>
-      <article class="story-chapter" data-story-chapter>
+      <article class="story-chapter" id="preparation" data-story-chapter>
         <div><p class="story-kicker">PREPARATION</p><h2>Each station<br><em>has its place.</em></h2><p>Pair register, kitchen, and bar devices. Give each station the access it needs to handle its own queue.</p></div>
         <figure class="tour-product"><img src="{% static 'core/landing/veyra-kitchen-example.png' %}" width="979" height="440" alt="Veyra Kitchen queue with sample orders and preparation actions" loading="lazy" decoding="async"><figcaption>Kitchen · Example orders</figcaption></figure>
       </article>
-      <article class="story-chapter" data-story-chapter>
+      <article class="story-chapter" id="inventory-tour" data-story-chapter>
         <div><p class="story-kicker">INVENTORY</p><h2>Know what<br><em>you have.</em></h2><p>Follow stock by location, receive deliveries in parts, and see a history of adjustments and purchases.</p></div>
         <figure class="tour-product"><img src="{% static 'core/landing/veyra-stock-example.png' %}" width="979" height="330" alt="Veyra inventory list with sample stock balances by location" loading="lazy" decoding="async"><figcaption>Inventory · Example stock</figcaption></figure>
       </article>
     </div>
-    <div class="story-progress" aria-hidden="true"><span data-story-progress></span></div>
     <p class="sr-only" data-film-status role="status" aria-live="polite"></p>
   </div>
 </section>

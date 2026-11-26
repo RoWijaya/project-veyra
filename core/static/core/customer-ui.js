@@ -58,6 +58,11 @@ document.addEventListener("DOMContentLoaded", () => {
     filter();
   });
 
+  if (store.hasAttribute("data-render-preview")) {
+    // The private editor reports errors without navigating or connecting to a guest stream.
+    return;
+  }
+
   let adding = false;
   store.addEventListener("submit", async (event) => {
     const form = event.target.closest("[data-cart-add]");
@@ -165,11 +170,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let syncing = false;
   let pending = false;
   let menuRequest;
+  const menuUrl = window.location.href;
   const pauseMenuUpdates = () => {
     stopped = true;
     menuRequest?.abort();
     clearTimeout(timer);
-    socket?.close();
+    if (socket?.readyState === WebSocket.OPEN) socket.close();
   };
   const retireLink = () => {
     stopped = true;
@@ -185,8 +191,9 @@ document.addEventListener("DOMContentLoaded", () => {
     syncing = true;
     menuRequest = new AbortController();
     try {
-      const response = await fetch(window.location.href, {
+      const response = await fetch(menuUrl, {
         credentials: "same-origin", cache: "no-store", signal: menuRequest.signal,
+        headers: { "X-Storefront-Refresh": "1" },
       });
       if ([403, 404].includes(response.status)) {
         retireLink();
@@ -209,16 +216,26 @@ document.addEventListener("DOMContentLoaded", () => {
           (buttons.find((button) => button.dataset.menuCategory === focusedCategory) || buttons[0])?.focus();
         }
       }
+      const freshStore = page.querySelector("[data-customer-store]");
+      const theme = document.querySelector("link#store-design");
+      const nextTheme = page.querySelector("link#store-design")?.getAttribute("href");
+      ["orderingCustomized", "menuLayout", "menuButton", "menuCard"].forEach((key) => {
+        if (freshStore?.dataset[key] !== undefined) store.dataset[key] = freshStore.dataset[key];
+      });
+      if (theme && nextTheme && theme.getAttribute("href") !== nextTheme) theme.href = nextTheme;
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      const freshColor = page.querySelector('meta[name="theme-color"]');
+      if (themeColor && freshColor) themeColor.content = freshColor.content;
       const brand = document.getElementById("store-brand");
       const latestBrand = page.getElementById("store-brand");
-      if (brand && latestBrand && brand.textContent !== latestBrand.textContent) {
-        brand.textContent = latestBrand.textContent;
+      if (brand && latestBrand && brand.innerHTML !== latestBrand.innerHTML) {
+        brand.replaceChildren(...latestBrand.childNodes);
         document.title = page.title;
       }
       const intro = document.getElementById("store-intro");
       const latestIntro = page.getElementById("store-intro");
       if (intro && latestIntro && intro.innerHTML !== latestIntro.innerHTML) intro.replaceWith(latestIntro);
-      ["store-products", "store-banners"].forEach((id) => {
+      ["store-products", "store-banners", "store-information"].forEach((id) => {
         const existing = document.getElementById(id);
         const replacement = page.getElementById(id);
         if (existing && replacement) existing.replaceWith(replacement);
@@ -271,7 +288,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const connect = () => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     socket = new WebSocket(`${protocol}//${window.location.host}/ws/guest/menu/${encodeURIComponent(store.dataset.menuToken)}/`);
-    socket.addEventListener("open", () => { retryDelay = 1000; connection.textContent = "Menu updates connected"; refresh(); });
+    socket.addEventListener("open", () => {
+      if (stopped) return;
+      retryDelay = 1000;
+      connection.textContent = "Menu updates connected";
+      refresh();
+    });
     socket.addEventListener("message", refresh);
     socket.addEventListener("close", (event) => {
       if (stopped) return;

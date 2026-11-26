@@ -2,12 +2,14 @@ import hashlib
 import json
 
 from django.core.cache import cache
+from django.db.models import F, Q
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from .models import Order, PairedDevice, PrintJob, Product, Station
+from .payments.midtrans import MidtransStatusUnavailable
 from .services import (
     acknowledge_print_job,
     create_order,
@@ -80,6 +82,7 @@ def _device(request, station_id):
     device = (
         PairedDevice.objects.select_related("station", "station__business")
         .filter(
+            Q(station__location__isnull=True) | Q(station__location__business_id=F("station__business_id")),
             station_id=station_id,
             token_digest=digest,
             revoked_at__isnull=True,
@@ -271,6 +274,8 @@ def station_print_jobs(request, station_id):
         business=device.station.business,
         station=device.station,
     )
+    if device.station.location_id:
+        jobs = jobs.filter(order__location_id=device.station.location_id)
     if status_filter != "all":
         jobs = jobs.filter(status=status_filter)
     jobs = jobs.order_by("-created_at")[:50]
@@ -405,9 +410,11 @@ def payment_webhook(request, provider):
         )
     except PermissionError as error:
         return _error(str(error), 401)
+    except MidtransStatusUnavailable:
+        return _error("Payment verification is temporarily unavailable.", 503)
     except ValueError as error:
         return _error(str(error), 400)
-    except Exception as error:
+    except Exception:
         return _error("Processing error", 500)
 
     return JsonResponse({"status": "ok", "transaction_status": tx.status})

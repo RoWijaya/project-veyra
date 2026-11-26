@@ -20,7 +20,7 @@ def line_amount(quantity, unit_cost):
 def lock_purchasing_member(business, actor):
     business = Business.objects.select_for_update().get(pk=business.pk)
     require_business_feature(business, "inventory")
-    membership = business.memberships.filter(user=actor, active=True).first()
+    membership = business.memberships.filter(user=actor, user__is_active=True, active=True).first()
     if membership is None or not all(membership.allows(code) for code in ("inventory.manage", "inventory.view")):
         raise PermissionError("You cannot manage purchasing for this business.")
     return membership

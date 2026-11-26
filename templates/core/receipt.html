@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load static %}
+{% load static tz %}
 {% block title %}Receipt {{ receipt.order_number }} · {{ business.name }}{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{% static 'core/receipt.css' %}">
@@ -14,7 +14,7 @@
     <article class="receipt-paper" aria-label="Receipt preview">
       <h2>{{ receipt.business_name }}</h2>
       {% if receipt.location %}<p>{{ receipt.location }}</p>{% endif %}
-      <p>{{ receipt.created_at }}</p>
+      <p>{% localtime off %}<time datetime="{{ receipt_created|date:'c' }}">{{ receipt_created|date:"d M Y · H:i" }}</time>{% endlocaltime %}</p>
       <hr>
       <dl><div><dt>Order</dt><dd>{{ receipt.order_number }}</dd></div><div><dt>Service</dt><dd>{{ receipt.order_type }}</dd></div>
       {% if receipt.table_label %}<div><dt>Table</dt><dd>{{ receipt.table_label }}</dd></div>{% endif %}
@@ -34,8 +34,12 @@
       <hr><p class="receipt-reference">Receipt {{ receipt.receipt_number }}</p>
     </article>
     <aside class="receipt-controls receipt-print-options">
+      <div id="receipt-refund-status">
+        {% if refunded %}<p><strong>{% if refunded >= order.total %}Fully refunded{% else %}Partially refunded{% endif %}</strong> · Rp {{ refunded|floatformat:"2g" }} returned · Rp {{ retained|floatformat:"2g" }} retained</p>{% endif %}
+        <p><a class="quiet-link" href="{% url 'order_refunds' business.slug order.pk %}">Refunds and payment history</a></p>
+      </div>
       <h2>Printing</h2>
-      <form method="get" class="receipt-width-form"><label class="field"><span>Paper width</span><select name="width"><option value="80"{% if width == '80' %} selected{% endif %}>80 mm</option><option value="58"{% if width == '58' %} selected{% endif %}>58 mm</option></select></label><button class="button button-light">Update preview</button></form>
+      <form method="get" class="receipt-width-form"><div class="field"><label for="receipt-paper-width">Paper width</label><select id="receipt-paper-width" name="width"><option value="80"{% if width == '80' %} selected{% endif %}>80 mm</option><option value="58"{% if width == '58' %} selected{% endif %}>58 mm</option></select></div><button class="button button-light">Update preview</button></form>
       {% if can_print %}<button type="button" class="button button-dark" data-print-receipt>Print with browser</button>
       <p class="field-hint">Choose the matching paper size in the print dialog. Turn off browser headers and footers.</p>{% endif %}
       <p class="field-hint" data-receipt-connection role="status">Connecting to print updates…</p>
@@ -49,7 +53,7 @@
         </form>
         {% elif can_print %}<p class="inline-empty">Use browser printing, or connect a printer to a station at this order's location.{% if business.owner_id == request.user.pk %} <a href="{% url 'stations' business.slug %}">Manage stations</a>{% endif %}</p>{% endif %}
         <h3>Print history</h3>
-        {% if history %}<ol class="receipt-history">{% for job in history %}<li><strong>{{ job.printer }}</strong><span>{% if job.status == 'pending' %}Queued{% elif job.status == 'printing' %}Accepted by printer service{% elif job.status == 'printed' %}Printer acknowledged{% elif job.status == 'failed' %}Failed{% else %}Cancelled{% endif %}</span><small>{{ job.created_at }}{% if job.error %} · {{ job.error }}{% endif %}</small></li>{% endfor %}</ol>{% else %}<p class="field-hint">No printer jobs requested. Browser printing opens your device's print dialog.</p>{% endif %}
+        {% if history %}<ol class="receipt-history">{% for job in history %}<li><strong>{{ job.printer.name|default:"Removed printer" }}</strong><span>{% if job.status == 'pending' %}Queued{% elif job.status == 'printing' %}Accepted by printer service{% elif job.status == 'printed' %}Printer acknowledged{% elif job.status == 'failed' %}Failed{% else %}Cancelled{% endif %}</span><small><time datetime="{{ job.created_at|date:'c' }}">{{ job.created_at|date:"d M Y · H:i" }}</time>{% if job.last_error %} · Check the printer connection.{% endif %}</small></li>{% endfor %}</ol>{% else %}<p class="field-hint">No printer jobs requested. Browser printing opens your device's print dialog.</p>{% endif %}
       </div>
     </aside>
   </div>

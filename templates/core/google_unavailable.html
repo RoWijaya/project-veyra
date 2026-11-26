@@ -1,0 +1,11 @@
+{% extends "core/error_page.html" %}
+{% block error_title %}Google sign-in unavailable{% endblock %}
+{% block error_heading %}Google sign-in unavailable{% endblock %}
+{% block error_description %}{{ detail }}{% endblock %}
+{% block error_action %}
+  {% if request.user.is_authenticated %}
+    <a class="button button-dark" href="{% url 'account_security' %}">Back to account security</a>
+  {% else %}
+    <a class="button button-dark" href="{% url 'login' %}">Sign in with email</a>
+  {% endif %}
+{% endblock %}

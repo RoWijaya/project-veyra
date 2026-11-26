@@ -18,9 +18,9 @@
       <h2>{% if form.instance.pk %}Edit {{ form.instance.name }}{% else %}New group{% endif %}</h2>
       {{ form.non_field_errors }}
       {% for field in form %}
-        {% if field.name == 'products' or field.name == 'locations' %}
-        <fieldset class="modifier-targets"><legend>{{ field.label }}</legend>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{{ field.errors }}</fieldset>
-        {% else %}<div class="field">{{ field.label_tag }}{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{{ field.errors }}</div>{% endif %}
+        {% if field.name == "products" %}{% include "core/multi_picker.html" with singular="product" plural="products" %}
+        {% elif field.name == "locations" %}{% include "core/multi_picker.html" with singular="location" plural="locations" %}
+        {% else %}{% include "core/purchasing_field.html" %}{% endif %}
       {% endfor %}
       <h3>Choices</h3>
       <p class="field-hint">Enter a name and any added cost. Blank choices can be left empty.</p>
@@ -31,11 +31,12 @@
         <legend>{% if option.instance.pk %}{{ option.instance.name }}{% else %}New choice{% endif %}</legend>
         {{ option.non_field_errors }}
         {% for field in option.hidden_fields %}{{ field }}{{ field.errors }}{% endfor %}
-        {% for field in option.visible_fields %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+        {% for field in option.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
       </fieldset>
       {% endfor %}
       <button class="button button-dark form-submit">Save group</button>
     </form>
   </div>
 </section>
+{% include "core/multi_picker_assets.html" %}
 {% endblock %}

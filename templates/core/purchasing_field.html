@@ -1,5 +1,22 @@
-<div class="field">
-  <label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}
-  {% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}
-  {% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}
-</div>
+{% if field.is_hidden %}
+  {{ field }}{{ field.errors }}
+{% elif field.field.widget.use_fieldset %}
+  <fieldset class="permission-fields"{% if field.aria_describedby %} aria-describedby="{{ field.aria_describedby }}"{% endif %}>
+    <legend>{{ field.label }}</legend>
+    {% if field.help_text %}<p class="field-hint" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</p>{% endif %}
+    {{ field }}{{ field.errors }}
+  </fieldset>
+{% else %}
+  <div class="field{% if field.field.widget.input_type == 'checkbox' %} field-check{% endif %}">
+    {% if field.field.widget.input_type == "checkbox" %}
+      <label>{{ field }}<span>{{ field.label }}</span></label>
+    {% else %}
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if color_value %}<output class="builder-color-value" for="{{ field.id_for_label }}">{{ color_value|upper }}</output>{% endif %}
+    {% endif %}
+    {% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}
+    {{ field.errors }}
+    {% if field.field.widget.input_type == "file" %}<p class="field-hint upload-feedback" data-upload-feedback role="status"></p>{% endif %}
+  </div>
+{% endif %}

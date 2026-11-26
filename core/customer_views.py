@@ -1,25 +1,44 @@
 """Anonymous customer carts scoped to the browser and a signed menu link."""
 
+import hashlib
 import uuid
 from decimal import Decimal
+from secrets import token_urlsafe
 
 from django.contrib import messages
 from django.core import signing
 from django.db import transaction
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.crypto import salted_hmac
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_http_methods, require_safe
 
-from .media_services import menu_banners, ordering_page_for
-from .models import DiningTable, GuestCart, Location, Order, PaymentConnection, PaymentTransaction, Product
+from .media_services import menu_banners
+from .models import (
+    DiningTable,
+    GuestCart,
+    Location,
+    Order,
+    OrderingPageSnapshot,
+    PaymentConnection,
+    PaymentTransaction,
+    Product,
+)
 from .modifiers import modifier_catalog, normalize_options, price_modifiers, submitted_options
+from .ordering_page import (
+    add_presentation,
+    menu_colors,
+    published_design,
+    settings_for,
+    visible_banners,
+)
 from .permissions import ORDER_TRACKING_MAX_AGE, order_tracking_cookie_name
 from .pricing import VoucherError, calculate_voucher, price_order_line, promotional_ordering
-from .voucher_limits import VoucherRateLimit, check_voucher_attempt
 from .services import business_entitlements, create_order, initiate_qris_payment
 from .storefront import resolve_storefront
+from .voucher_limits import VoucherRateLimit, check_voucher_attempt
 
 
 def _cart(request, storefront):
@@ -46,10 +65,7 @@ def _line_key(product_id, selected):
     return f"{product_id}:{','.join(map(str, selected))}"
 
 
-def _context(storefront, token, cart, draft_type=None):
-    table = storefront.table
-    business = storefront.business
-    location = storefront.location
+def guest_catalog(business, location):
     products = promotional_ordering(
         business=business,
         products=business.products.filter(active=True).select_related("category", "image").defer("image__content"),
@@ -57,9 +73,15 @@ def _context(storefront, token, cart, draft_type=None):
     )
     categories = {product.category_id: product.category for product in products if product.category and product.category.active}
     groups = modifier_catalog(business=business, product_ids=[p.pk for p in products], location=location)
-    products_by_id = {str(product.pk): product for product in products}
     for product in products:
         product.order_modifier_groups = groups[product.pk]
+    return products, sorted(categories.values(), key=lambda category: (category.sort_order, category.name.casefold()))
+
+
+def _context(storefront, token, cart, draft_type=None):
+    table, business, location = storefront.table, storefront.business, storefront.location
+    products, categories = guest_catalog(business, location)
+    products_by_id = {str(product.pk): product for product in products}
     items = cart.items if not cart.order_id else {}
     lines, priced_lines = [], []
     unavailable_items = set()
@@ -109,15 +131,27 @@ def _context(storefront, token, cart, draft_type=None):
              "lines": [line.approval() for line in priced_lines]}
     if applied:
         quote.update(voucher=applied.fingerprint(), order_type=order_type)
-    ordering_page = ordering_page_for(business)
-    return {
+    design = published_design(business)
+    is_snapshot = isinstance(design, OrderingPageSnapshot)
+    asset_version = None
+    if design:
+        asset_version = design.saved_at if is_snapshot else design.updated_at
+    providers = business.payment_connections.filter(verified_at__isnull=False)
+    if total <= 0:
+        providers = providers.none()
+    elif total != total.to_integral_value():
+        providers = providers.exclude(provider=PaymentConnection.Provider.MIDTRANS)
+    selected_payment = cart.payment_method
+    if selected_payment != "counter" and not providers.filter(provider=selected_payment.partition(":")[2]).exists():
+        selected_payment = "counter"
+    context = {
         "business": business, "location": location, "table": table, "table_token": token,
         "cart": cart, "products": products,
         "menu_url": reverse("table_order" if table else "pickup_menu", args=[token]),
         "cart_url": reverse("your_order" if table else "pickup_cart", args=[token]),
         "order_type": order_type, "dine_in_available": dine_in_available,
         "takeaway_available": takeaway_available,
-        "categories": sorted(categories.values(), key=lambda category: (category.sort_order, category.name.casefold())),
+        "categories": categories,
         "lines": lines, "cart_count": sum(_line_selection(key, value)[1] for key, value in items.items()),
         "total": total, "invalid_options": any(line.get("option_error") for line in lines),
         "products_by_id": products_by_id,
@@ -125,17 +159,61 @@ def _context(storefront, token, cart, draft_type=None):
         "priced_lines": priced_lines,
         "voucher": applied, "voucher_code": voucher_code, "voucher_error": voucher_error,
         "vouchers_allowed": vouchers_allowed,
-        "voucher_input": voucher_code, "selected_payment": cart.payment_method, "checkout_note": cart.note,
+        "voucher_input": voucher_code, "selected_payment": selected_payment, "checkout_note": cart.note,
         "cart_quote": signing.dumps(quote, salt="veyra-cart-quote"),
         "quote_data": quote, "unavailable_items": unavailable_items,
         "subscription_allows_orders": allowed,
-        "providers": business.payment_connections.filter(verified_at__isnull=False),
+        "providers": providers,
         "banners": menu_banners(business, location, token),
-        "ordering_page": ordering_page,
-        "store_name": (ordering_page.display_name if ordering_page else "") or business.name,
+        "ordering_page": design,
+        "ordering_customized": bool(design and (is_snapshot or design.appearance)),
+        "ordering_asset_version": asset_version,
         # Preserve context used by older QR checkout clients.
         "idempotency_key": uuid.uuid4(), "tracking_token": uuid.uuid4().hex + uuid.uuid4().hex,
     }
+    data = settings_for(design)
+    add_presentation(context, data)
+    context["banners"] = visible_banners(context["banners"], data)
+    return context
+
+
+def render_storefront(request, template, context, status=200):
+    request.ordering_preview = context.get("is_preview", False)
+    fragment = not request.ordering_preview and (
+        request.headers.get("X-Storefront-Refresh") == "1"
+        or request.headers.get("X-Cart-Update") == "quantity"
+    )
+    if request.ordering_preview:
+        request.storefront_style_nonce = context["storefront_style_nonce"] = token_urlsafe(18)
+    else:
+        context["storefront_fragment"] = fragment
+        _, version = storefront_stylesheet(context["ordering_design"], context["ordering_colors"])
+        context["ordering_theme_url"] = reverse(
+            "guest_ordering_theme", args=[context["table_token"], version]
+        )
+    response = render(request, template, context, status=status)
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+def storefront_stylesheet(data, colors):
+    declarations = render_to_string("core/storefront_theme.css", {
+        "ordering_design": data, "ordering_colors": colors,
+    })
+    css = ".storefront {\n" + declarations + "}\n"
+    return css, hashlib.sha256(css.encode()).hexdigest()[:24]
+
+
+@require_safe
+def guest_ordering_theme(request, token, version):
+    storefront = resolve_storefront(token)
+    data = settings_for(published_design(storefront.business))
+    css, current = storefront_stylesheet(data, menu_colors(data))
+    response = HttpResponse(css, content_type="text/css; charset=utf-8")
+    # Publication can change between the HTML request and its stylesheet request.
+    response["Cache-Control"] = "private, max-age=300" if version == current else "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def _edit_item(request, action, items, products):
@@ -197,13 +275,16 @@ def _order_type(request, context):
     raise ValueError("Choose an available order type.")
 
 
-@require_http_methods(["GET"])
+@require_safe
 def menu(request, token, pickup=False):
+    return render_guest_menu(request, token, pickup=pickup)
+
+
+def render_guest_menu(request, token, *, pickup=False, error=None):
     storefront = _storefront(token, pickup)
     context = _context(storefront, token, _cart(request, storefront))
-    response = render(request, "core/customer_menu.html", context)
-    response["Cache-Control"] = "private, no-store"
-    return response
+    context["error"] = error
+    return render_storefront(request, "core/customer_menu.html", context)
 
 
 def _tracking_response(request, cart):
@@ -299,7 +380,10 @@ def your_order(request, token, pickup=False):
                         cart.tracking_token = uuid.uuid4()
                     items = dict(cart.items)
                     if action in {"add", "update", "remove", "increment", "decrement", "customize"}:
-                        _edit_item(request, action, items, context["products_by_id"])
+                        products = context["products_by_id"]
+                        if action == "add":
+                            products = {str(product.pk): product for product in context["menu_products"]}
+                        _edit_item(request, action, items, products)
                     if action == "remove_unavailable":
                         items = {key: value for key, value in items.items() if key not in context["unavailable_items"]}
                     if action in {"save", "apply_voucher", "remove_voucher"}:
@@ -353,6 +437,4 @@ def your_order(request, token, pickup=False):
         context["selected_payment"] = request.POST.get("payment_method", cart.payment_method)
     context["error"] = error
     template = "core/customer_menu.html" if error and request.POST.get("action") == "add" else "core/your_order.html"
-    response = render(request, template, context, status=status)
-    response["Cache-Control"] = "private, no-store"
-    return response
+    return render_storefront(request, template, context, status=status)

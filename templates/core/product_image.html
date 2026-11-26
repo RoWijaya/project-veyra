@@ -10,7 +10,7 @@
     <form method="post" enctype="multipart/form-data" action="{% url 'product_image' business.slug product.pk %}" class="form-stack" data-media-form>
       {% csrf_token %}<input type="hidden" name="return_to_catalog" value="1">
       {{ form.non_field_errors }}
-      {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+      {% for field in form %}{% include "core/purchasing_field.html" %}{% endfor %}
       <img class="media-preview" data-upload-preview alt="Selected image preview" width="480" height="320" hidden>
       <div class="management-actions"><button class="button button-dark">Save image</button><a class="button button-light" href="{% url 'catalog' business.slug %}">Back to catalog</a></div>
     </form>

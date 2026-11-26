@@ -22,9 +22,11 @@ def business_navigation(context):
     def allows(*permissions):
         return owner or any(membership.allows(permission) for permission in permissions)
 
+    business_wide = owner or not membership.location_restricted
     current = request.resolver_match.url_name
     settings_destinations = [
-        ("Ordering page", "ordering_page_settings", "Guest menu name, introduction and banner", owner),
+        ("Ordering page", "ordering_page_settings", "Guest menu design, drafts and publication",
+         allows("ordering_page.view", "ordering_page.edit")),
         ("Locations", "locations", "Addresses and service locations", allows("locations.view")),
         ("Team access", "team", "Employee invitations and permissions", allows("employees.view", "employees.manage")),
         ("Payment accounts", "payment_settings", "Merchant connections and verification", owner),
@@ -50,7 +52,7 @@ def business_navigation(context):
         ]),
         ("Business", [
             ("Product catalog", "catalog", allows("catalog.view"), ("categories", "category_edit", "product_edit", "modifier_groups", "modifier_group_edit", "product_image_edit")),
-            ("Promotions", "promotions", allows("catalog.view"), ("promotion_edit", "vouchers", "voucher_detail", "banners", "banner_edit")),
+            ("Promotions", "promotions", business_wide and allows("catalog.view"), ("promotion_edit", "vouchers", "voucher_detail", "banners", "banner_edit")),
             ("Inventory", "inventory", allows("inventory.view"), ("suppliers", "supplier_create", "supplier_detail", "purchases", "purchase_create", "purchase_detail", "purchase_edit", "purchase_receiving")),
             ("Recipes", "recipes", allows("inventory.manage"), ()),
             ("Customers", "customers", allows("customers.view"), ()),

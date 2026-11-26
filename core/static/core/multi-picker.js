@@ -1,6 +1,6 @@
 
 document.querySelectorAll("[data-multi-picker]").forEach((field) => {
-  const select = field.querySelector("select[multiple]");
+  const select = field.querySelector("select");
   const picker = field.querySelector("[data-picker]");
   const label = field.querySelector("label");
   const toggle = picker.querySelector("[data-toggle]");
@@ -20,7 +20,7 @@ document.querySelectorAll("[data-multi-picker]").forEach((field) => {
   let matches = [];
   let activeChoice;
 
-  const choices = Array.from(select.options, (option) => {
+  const choices = Array.from(select.options).filter((option) => select.multiple || option.value).map((option) => {
     const button = choiceTemplate.content.firstElementChild.cloneNode(true);
     const name = option.label;
     button.firstElementChild.textContent = name;
@@ -38,6 +38,12 @@ document.querySelectorAll("[data-multi-picker]").forEach((field) => {
     const fragment = document.createDocumentFragment();
     for (const choice of choices) {
       choice.button.setAttribute("aria-selected", String(choice.option.selected));
+    }
+    if (!select.multiple) {
+      selection.hidden = !selected.length;
+      clear.hidden = selected.every(({ button }) => button.disabled);
+      summary.textContent = selected[0]?.name || (choices.length ? `Choose a ${singular}` : `No ${plural} available`);
+      return;
     }
     for (const [index, choice] of selected.entries()) {
       const chip = chipTemplate.content.firstElementChild.cloneNode(true);
@@ -59,9 +65,14 @@ document.querySelectorAll("[data-multi-picker]").forEach((field) => {
   }
 
   function changeChoice({ option }) {
-    option.selected = !option.selected;
+    if (select.multiple) option.selected = !option.selected;
+    else select.value = option.value;
     select.dispatchEvent(new Event("change", { bubbles: true }));
     announce(summary.textContent);
+    if (!select.multiple) {
+      setOpen(false);
+      toggle.focus();
+    }
   }
 
   function setActiveChoice(choice) {
@@ -124,6 +135,7 @@ document.querySelectorAll("[data-multi-picker]").forEach((field) => {
     for (const { option, button } of choices) {
       if (!button.disabled) option.selected = false;
     }
+    if (!select.multiple) select.value = "";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     announce(`No ${plural} selected.`);
     setOpen(false);

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import json
 import secrets
 import uuid
@@ -8,11 +9,13 @@ from decimal import Decimal, InvalidOperation
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from django.conf import settings
 from django.core import signing
 from django.db import models, transaction
 from django.utils import timezone
+
+from .permissions import INVITABLE_PERMISSIONS
 
 from .models import (
     AuditEvent,
@@ -28,6 +31,7 @@ from .models import (
     Order,
     OrderLine,
     OrderLinePromotion,
+    OrderRefund,
     OrderTender,
     OutboxEvent,
     PairedDevice,
@@ -71,10 +75,10 @@ def dispatch_outbox_event(event_id):
     try:
         from channels.layers import get_channel_layer
 
-        layer = get_channel_layer()
-        if layer is None:
-            raise RuntimeError("No channel layer is configured")
         async def publish():
+            layer = get_channel_layer()
+            if layer is None:
+                raise RuntimeError("No channel layer is configured")
             message = {"type": event.event_type, "event_id": str(event.pk), **event.payload}
             if event.event_type == "menu.update":
                 await layer.group_send(f"guest_menu_{event.business_id.hex}", message)
@@ -93,7 +97,12 @@ def dispatch_outbox_event(event_id):
                     order_tracking_group_name(event.payload["order_id"]), message
                 )
 
-        asyncio.run(publish())
+        if event.event_type == "media.archive":
+            from .media_storage import archive_media
+
+            archive_media(event)
+        else:
+            asyncio.run(publish())
     except Exception as error:
         retry_delay = min(5 * 2 ** min(event.attempts - 1, 6), 300)
         OutboxEvent.objects.filter(pk=event.pk, published_at__isnull=True).update(
@@ -151,6 +160,9 @@ def _queue_order_event(order, name):
             "status": order.status,
             "payment_status": order.payment_status,
             "payment_method": order.payment_method,
+            "refunded_amount": str(order.refunds.filter(status=OrderRefund.Status.SUCCEEDED).aggregate(
+                amount=models.Sum("amount", default=Decimal("0.00")),
+            )["amount"]),
             "total": str(order.total),
             "order_type": order.order_type,
             "source": order.source,
@@ -163,6 +175,7 @@ def _queue_order_event(order, name):
 
 
 def _queue_inventory_event(*, business, item, location, balance, order=None):
+    estimate = balance.current_cost_estimate
     OutboxEvent.objects.create(
         business=business,
         event_type="inventory.update",
@@ -171,6 +184,7 @@ def _queue_inventory_event(*, business, item, location, balance, order=None):
             "item_id": str(item.pk),
             "location_id": str(location.pk),
             "quantity": str(balance.quantity),
+            "current_cost_estimate": str(estimate) if estimate is not None else None,
             "last_purchase_unit_cost": str(balance.last_purchase_unit_cost) if balance.last_purchase_unit_cost is not None else None,
         },
         next_attempt_at=timezone.now(),
@@ -324,8 +338,8 @@ def create_location(*, business, actor, name, address=""):
     with transaction.atomic():
         business = Business.objects.select_for_update().get(pk=business.pk)
         membership = Membership.objects.get(business=business, user=actor, active=True)
-        if not membership.allows("locations.manage"):
-            raise PermissionError("You cannot manage locations for this business")
+        if not membership.allows("locations.manage") or membership.location_restricted:
+            raise PermissionError("Only business-wide location managers can add a location")
         enforce_business_limit(
             business, "locations", business.locations.filter(active=True).count()
         )
@@ -351,31 +365,15 @@ def create_location(*, business, actor, name, address=""):
 def create_invitation(*, business, actor, email, permissions):
     email = email.strip().lower()
     requested_permissions = set(permissions)
-    valid_permissions = {
-        "catalog.view",
-        "catalog.manage",
-        "orders.view",
-        "orders.create",
-        "orders.manage",
-        "inventory.view",
-        "inventory.manage",
-        "locations.view",
-        "locations.manage",
-        "customers.view",
-        "customers.manage",
-        "reports.view",
-        "employees.view",
-        "employees.manage",
-    }
-    if not requested_permissions.issubset(valid_permissions):
+    if not requested_permissions.issubset(INVITABLE_PERMISSIONS):
         raise ValueError("Invitation contains an unknown permission")
     token = secrets.token_urlsafe(32)
     digest = hashlib.sha256(token.encode()).hexdigest()
     with transaction.atomic():
         business = Business.objects.select_for_update().get(pk=business.pk)
         membership = Membership.objects.get(business=business, user=actor, active=True)
-        if not membership.allows("employees.manage"):
-            raise PermissionError("You cannot manage employees for this business")
+        if not membership.allows("employees.manage") or membership.location_restricted:
+            raise PermissionError("Only business-wide team managers can invite employees")
         if business.owner_id != actor.pk and not requested_permissions.issubset(
             set(membership.permissions)
         ):
@@ -446,6 +444,28 @@ def accept_invitation(*, token, business_slug, actor):
     return membership
 
 
+@transaction.atomic
+def deactivate_membership(*, business, actor, member_id):
+    business = Business.objects.select_for_update().get(pk=business.pk)
+    if business.owner_id != actor.pk:
+        raise PermissionError("Only the business owner can deactivate team members")
+    member = Membership.objects.select_for_update(of=("self",)).select_related("user").get(
+        pk=member_id, business=business, active=True,
+    )
+    if member.user_id == business.owner_id:
+        raise PermissionError("The business owner cannot be deactivated")
+    member.active = False
+    member.save(update_fields=["active"])
+    now = timezone.now()
+    business.invitations.filter(
+        email=member.user.email, accepted_at__isnull=True, expires_at__gt=now,
+    ).update(expires_at=now)
+    AuditEvent.objects.create(
+        business=business, actor=actor, action="membership.deactivated",
+        object_type="Membership", object_id=str(member.pk),
+    )
+
+
 def revoke_invitation(*, business, invitation_id, actor):
     with transaction.atomic():
         business = Business.objects.select_for_update().get(pk=business.pk)
@@ -472,12 +492,14 @@ def revoke_invitation(*, business, invitation_id, actor):
     return invitation
 
 
-def _station_session(device, *capabilities):
-    session = (
-        PairedDevice.objects.select_related("station", "station__business")
-        .filter(pk=device.pk, revoked_at__isnull=True, station__active=True)
-        .first()
+def _station_session(device, *capabilities, lock=False):
+    sessions = PairedDevice.objects.select_related("station", "station__business").filter(
+        models.Q(station__location__isnull=True) | models.Q(station__location__business_id=models.F("station__business_id")),
+        pk=device.pk, token_digest=device.token_digest, revoked_at__isnull=True, station__active=True,
     )
+    if lock:
+        sessions = sessions.select_for_update(of=("self", "station"))
+    session = sessions.first()
     if session is None:
         raise PermissionError("This station session is revoked or inactive")
     if not set(capabilities).issubset(set(session.station.capabilities)):
@@ -649,7 +671,7 @@ def _payment_fernet():
     if not key:
         raise RuntimeError("Payment credential encryption is not configured")
     try:
-        return Fernet(key.encode())
+        return MultiFernet([Fernet(value.encode()) for value in [key, *settings.PAYMENT_CREDENTIALS_ENCRYPTION_FALLBACK_KEYS]])
     except (TypeError, ValueError) as error:
         raise RuntimeError("Payment credential encryption key is invalid") from error
 
@@ -669,14 +691,24 @@ def save_payment_connection(*, business, actor, provider, environment, merchant_
         .decode()
     )
     with transaction.atomic():
+        previous = PaymentConnection.objects.select_for_update().filter(business=business, provider=provider).first()
+        merchant_id = merchant_id.strip()
+        if previous and previous.transactions.exists() and (
+            previous.environment != environment or previous.merchant_id != merchant_id
+        ):
+            raise ValueError("This merchant and environment are linked to payment history.")
         connection, _ = PaymentConnection.objects.update_or_create(
             business=business,
             provider=provider,
             defaults={
                 "environment": environment,
-                "merchant_id": merchant_id.strip(),
+                "merchant_id": merchant_id,
                 "credentials_ciphertext": ciphertext,
                 "verified_at": None,
+                "verification_state": PaymentConnection.Verification.PENDING,
+                "last_verification_at": None,
+                "last_verification_result": "",
+                "approval_reference": "",
             },
         )
         AuditEvent.objects.create(
@@ -693,23 +725,37 @@ def save_payment_connection(*, business, actor, provider, environment, merchant_
 def read_payment_credentials(*, connection, actor):
     if connection.business.owner_id != actor.pk:
         raise PermissionError("Only the business owner can access payment credentials")
-    return json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
+    try:
+        return json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
+    except (InvalidToken, ValueError, UnicodeError):
+        raise RuntimeError("The saved credential bundle cannot be decrypted.") from None
 
 
 def delete_payment_connection(*, business, connection_id, actor):
     if business.owner_id != actor.pk:
         raise PermissionError("Only the business owner can manage payment connections")
     with transaction.atomic():
-        connection = PaymentConnection.objects.get(pk=connection_id, business=business)
+        connection = PaymentConnection.objects.select_for_update().get(pk=connection_id, business=business)
+        retains_history = connection.transactions.exists()
+        if retains_history:
+            connection.verification_state = PaymentConnection.Verification.DISCONNECTED
+            connection.verified_at = None
+            connection.approval_reference = ""
+            connection.last_verification_result = "Credentials retained for outstanding payments and refunds."
+            connection.save(update_fields=[
+                "verification_state", "verified_at", "approval_reference", "last_verification_result", "updated_at",
+            ])
         AuditEvent.objects.create(
             business=business,
             actor=actor,
-            action="payment_connection.removed",
+            action="payment_connection.disabled" if retains_history else "payment_connection.removed",
             object_type="PaymentConnection",
             object_id=str(connection.pk),
             metadata={"provider": connection.provider},
         )
-        connection.delete()
+        if not retains_history:
+            connection.delete()
+        return retains_history
 
 
 def create_inventory_item(*, business, actor, name, unit, location_id, sku="", opening_stock=0):
@@ -790,13 +836,13 @@ def adjust_stock(
         membership = Membership.objects.get(business=business, user=actor, active=True)
         if not membership.allows("inventory.manage"):
             raise PermissionError("You cannot manage inventory for this business")
+        location = membership.allowed_locations().get(pk=location_id, active=True)
         existing = StockMovement.objects.filter(business=business, idempotency_key=key).first()
         if existing:
             if existing.request_digest != digest:
                 raise ValueError("Idempotency key was reused for another stock change")
             return existing
         item = InventoryItem.objects.get(business=business, pk=item_id, active=True)
-        location = membership.allowed_inventory_locations().get(pk=location_id, active=True)
         movement = record_inventory_movement(
             business=business, actor=actor, item=item, location=location, delta=delta, reason=reason,
             idempotency_key=key, request_digest=digest, note=note.strip(),
@@ -941,11 +987,15 @@ def create_order(
             actor = None
         else:
             if not guest:
-                if location_id:
-                    location = Location.objects.get(business=business, pk=location_id, active=True)
-                membership = Membership.objects.get(business=business, user=actor, active=True)
+                membership = Membership.objects.select_for_update(of=("self",)).get(
+                    business=business, user=actor, user__is_active=True, active=True,
+                )
                 if not membership.allows("orders.create") or not membership.allows("catalog.view"):
                     raise PermissionError("You cannot create orders for this business")
+                if location_id:
+                    location = membership.allowed_locations().get(pk=location_id, active=True)
+                elif membership.location_restricted:
+                    raise ValueError("Choose a location assigned to your account.")
                 if customer_id and not membership.allows("customers.view"):
                     raise PermissionError("You cannot select customers for this business")
         if key:
@@ -1032,6 +1082,10 @@ def create_order(
                 object_type="Voucher", object_id=str(applied.voucher.pk),
                 metadata={"order_id": str(order.pk), "redemption_id": str(redemption.pk)},
             )
+        if payment_method == Order.PaymentMethod.QRIS and (
+            total <= 0 or (payment_provider == PaymentConnection.Provider.MIDTRANS and total != total.to_integral_value())
+        ):
+            raise ValueError("Choose counter payment for this order total.")
         if (expected_total is not None and total != expected_total) or (
             expected_lines is not None and [line.approval() for line in priced] != expected_lines
         ):
@@ -1041,6 +1095,9 @@ def create_order(
         for item in priced:
             line = OrderLine.objects.create(
                 order=order, product=item.product, product_name=item.product.name,
+                sku_snapshot=item.product.sku,
+                category_snapshot_id=item.product.category_id,
+                category_snapshot_name=item.product.category.name if item.product.category_id else "",
                 unit_price=item.unit_price, base_unit_price=item.base_unit_price,
                 modifiers=item.modifiers, quantity=item.quantity,
             )
@@ -1065,7 +1122,45 @@ def create_order(
     return order
 
 
-def transition_order(*, business, order_id, status, actor=None, station_device=None):
+def _close_pending_qris(order):
+    from .payments.midtrans import MidtransStatusUnavailable
+
+    attempts = list(order.payments.filter(
+        status__in=PaymentTransaction.TENDER_BLOCKING_STATUSES,
+    ).select_for_update(of=("self",)).select_related("connection"))
+    for attempt in attempts:
+        if attempt.status != PaymentTransaction.Status.PENDING:
+            raise ValueError("Resolve the outstanding QRIS attempt with the provider before closing this order")
+        if attempt.provider != PaymentConnection.Provider.MIDTRANS:
+            raise ValueError("Confirm the QRIS payment was cancelled or expired with the provider before closing this order.")
+        adapter = get_payment_adapter(attempt.provider)
+        connection = attempt.connection
+        credentials = json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
+        request = {"connection": connection, "credentials": credentials, "reference": attempt.merchant_reference}
+        try:
+            verified = adapter.transaction_status(**request)
+            adapter.verify_transaction(attempt, verified, allow_unbound=True)
+            if verified.get("transaction_status") == "pending":
+                adapter.cancel_transaction(**request)
+                verified = adapter.transaction_status(**request)
+                adapter.verify_transaction(attempt, verified, allow_unbound=True)
+        except MidtransStatusUnavailable as error:
+            raise ValueError("QRIS cancellation could not be verified. Check the provider before closing this order.") from error
+        if verified.get("transaction_status") not in ("cancel", "deny", "expire"):
+            raise ValueError("QRIS may already have settled. Review the payment status before closing this order.")
+        attempt.status = (PaymentTransaction.Status.EXPIRED if verified["transaction_status"] == "expire"
+                          else PaymentTransaction.Status.FAILED)
+        attempt.save(update_fields=["status", "updated_at"])
+        order.payment_status = attempt.status
+        AuditEvent.objects.create(
+            business=order.business, action="payment.cancel_confirmed", object_type="PaymentTransaction",
+            object_id=str(attempt.pk), metadata={"order_id": str(order.pk)},
+        )
+    if attempts:
+        order.save(update_fields=["payment_status", "updated_at"])
+
+
+def transition_order(*, business, order_id, status, actor=None, station_device=None, station_id=None):
     allowed = {
         Order.Status.NEW: {Order.Status.PREPARING, Order.Status.CANCELLED},
         Order.Status.PREPARING: {Order.Status.READY, Order.Status.CANCELLED},
@@ -1089,11 +1184,20 @@ def transition_order(*, business, order_id, status, actor=None, station_device=N
             }
             actor = None
         else:
-            membership = Membership.objects.get(business=business, user=actor, active=True)
+            membership = Membership.objects.select_for_update(of=("self",)).get(
+                business=business, user=actor, user__is_active=True, active=True,
+            )
             if not membership.allows("orders.manage") or not membership.allows("orders.view"):
                 raise PermissionError("You cannot manage orders for this business")
             order_filter = {"business": business, "pk": order_id}
-        order = Order.objects.select_for_update().get(**order_filter)
+        orders = Order.objects.select_for_update().filter(**order_filter)
+        if station_device is None:
+            orders = membership.scope_locations(orders)
+            if station_id is not None:
+                station = membership.scope_locations(business.stations).get(pk=station_id, active=True)
+                if station.location_id:
+                    orders = orders.filter(location_id=station.location_id)
+        order = orders.get()
         if (
             status == Order.Status.PREPARING
             and order.source in Order.GUEST_SOURCES
@@ -1103,10 +1207,15 @@ def transition_order(*, business, order_id, status, actor=None, station_device=N
             raise ValueError("Guest QRIS orders cannot enter preparation before payment is confirmed")
         if status not in allowed[order.status]:
             raise ValueError("Invalid order status transition")
+        if status == Order.Status.COMPLETED and order.payment_due:
+            raise ValueError("Collect payment before completing this order")
         if status == Order.Status.PREPARING:
             _consume_order_recipe(order, actor)
-        elif status == Order.Status.CANCELLED and order.status == Order.Status.PREPARING:
-            _return_order_recipe(order, actor)
+        elif status == Order.Status.CANCELLED:
+            if order.payment_status != Order.PaymentStatus.PAID:
+                _close_pending_qris(order)
+            if order.status == Order.Status.PREPARING:
+                _return_order_recipe(order, actor)
         Order.objects.filter(pk=order.pk, status=order.status).update(status=status)
         AuditEvent.objects.create(
             business=business,
@@ -1146,10 +1255,12 @@ def record_order_payment(
     if len(reference) > 120:
         raise ValueError("Payment reference is too long")
     with transaction.atomic():
-        membership = Membership.objects.get(business=business, user=actor, active=True)
+        membership = Membership.objects.select_for_update(of=("self",)).get(
+            business=business, user=actor, user__is_active=True, active=True,
+        )
         if not membership.allows("orders.manage") or not membership.allows("orders.view"):
             raise PermissionError("You cannot record payments for this business")
-        order = Order.objects.select_for_update().get(business=business, pk=order_id)
+        order = membership.scope_locations(business.orders.select_for_update()).get(pk=order_id)
         existing = OrderTender.objects.filter(order=order, idempotency_key=key).first()
         if existing:
             if (
@@ -1161,8 +1272,10 @@ def record_order_payment(
             return existing
         if order.payment_status == Order.PaymentStatus.PAID:
             raise ValueError("This order is already paid")
-        if order.status in (Order.Status.COMPLETED, Order.Status.CANCELLED):
-            raise ValueError("Payment cannot be recorded for a closed order")
+        if order.status == Order.Status.CANCELLED:
+            raise ValueError("Payment cannot be recorded for a cancelled order")
+        if order.payments.filter(status__in=PaymentTransaction.TENDER_BLOCKING_STATUSES).exists():
+            raise ValueError("Resolve the outstanding QRIS payment before recording cash or card")
         if order.payment_method == Order.PaymentMethod.QRIS:
             raise ValueError("Orders using QRIS must be settled through the provider")
         if method == OrderTender.Method.CASH:
@@ -1423,21 +1536,26 @@ def route_order_to_stations(order):
     return created_jobs
 
 
+@transaction.atomic
 def reprint_order_ticket(*, business, order_id, station_id=None, actor=None, station_device=None):
+    orders = business.orders.all()
     if station_device is not None:
-        station_device = _station_session(station_device, "orders.view")
+        station_device = _station_session(station_device, "orders.view", lock=True)
         if station_device.station.business_id != business.pk:
             raise PermissionError("This station belongs to another business")
         station = station_device.station
-    elif actor is not None:
-        membership = Membership.objects.get(business=business, user=actor, active=True)
-        if not membership.allows("orders.view"):
-            raise PermissionError("You cannot view or reprint orders")
-        station = Station.objects.filter(business=business, pk=station_id).first() if station_id else None
     else:
-        station = None
-
-    order = Order.objects.get(business=business, pk=order_id)
+        membership = Membership.objects.select_for_update(of=("self",)).get(
+            business=business, user=actor, user__is_active=True, active=True,
+        )
+        if not membership.allows("orders.view") or not membership.allows("orders.manage"):
+            raise PermissionError("You cannot reprint orders for this business")
+        stations = membership.scope_locations(business.stations)
+        station = stations.get(pk=station_id, active=True) if station_id else None
+        orders = membership.scope_locations(orders)
+    if station and station.location_id:
+        orders = orders.filter(location_id=station.location_id)
+    order = orders.get(pk=order_id)
     items = [prep_item(line) for line in order.lines.all()]
 
     job = create_print_job(
@@ -1464,17 +1582,30 @@ def reprint_order_ticket(*, business, order_id, station_id=None, actor=None, sta
 def acknowledge_print_job(*, business, job_id, status, error="", station_device=None, actor=None):
     with transaction.atomic():
         job_filter = {"business": business, "pk": job_id}
+        jobs = PrintJob.objects.select_for_update().filter(**job_filter)
         if station_device is not None:
             station_device = _station_session(station_device, "orders.view")
-            job_filter["station"] = station_device.station
-        job = PrintJob.objects.select_for_update().get(**job_filter)
+            jobs = jobs.filter(station=station_device.station)
+            if station_device.station.location_id:
+                jobs = jobs.filter(order__location_id=station_device.station.location_id)
+        elif actor is not None:
+            membership = Membership.objects.select_for_update(of=("self",)).get(
+                business=business, user=actor, user__is_active=True, active=True,
+            )
+            if not membership.allows("orders.view") or not membership.allows("orders.manage"):
+                raise PermissionError("You cannot acknowledge print jobs for this business")
+            jobs = membership.scope_locations(jobs, "order__location")
+        else:
+            raise PermissionError("A paired device or authorized member must acknowledge a print job")
+        job = jobs.get()
         if status not in (PrintJob.Status.PRINTED, PrintJob.Status.FAILED, PrintJob.Status.PRINTING):
             raise ValueError("Invalid print job status")
-        if job.job_type == PrintJob.JobType.RECEIPT:
-            if job.status == status:
-                return job
-            if job.status not in (PrintJob.Status.PENDING, PrintJob.Status.PRINTING):
+        if job.status == status:
+            return job
+        if job.status not in (PrintJob.Status.PENDING, PrintJob.Status.PRINTING):
+            if job.job_type == PrintJob.JobType.RECEIPT:
                 raise ValueError("This receipt job is closed. Submit a new print request.")
+            return job
         job.status = status
         if status == PrintJob.Status.PRINTED:
             job.printed_at = timezone.now()
@@ -1496,239 +1627,363 @@ def acknowledge_print_job(*, business, job_id, status, error="", station_device=
     return job
 
 
-def verify_payment_connection(*, business, connection_id, actor):
+def verify_payment_connection(*, business, connection_id, actor, reference=""):
     if business.owner_id != actor.pk:
         raise PermissionError("Only the business owner can verify payment connections")
     connection = PaymentConnection.objects.get(pk=connection_id, business=business)
+    states = PaymentConnection.Verification
+    if connection.verification_state == states.DISCONNECTED:
+        return False, "Replace the credentials before verifying this disabled connection."
     credentials = read_payment_credentials(connection=connection, actor=actor)
     adapter = get_payment_adapter(connection.provider)
     valid, message = adapter.verify_credentials(connection=connection, credentials=credentials)
+    state = states.INCOMPLETE
     if valid:
-        connection.verified_at = timezone.now()
-        connection.save(update_fields=["verified_at"])
+        if connection.provider == PaymentConnection.Provider.BCA_QRIS:
+            state = states.EXTERNAL
+            message = "BCA approval and a supported SNAP verification contract are required. No connection has been verified."
+        elif not credentials.get("signature_secret_key", "").strip():
+            message = "Enter the Midtrans Signature Secret Key from the merchant dashboard."
+        elif not reference or len(reference) > 120 or not reference.isascii() or not reference.isprintable():
+            message = "Enter an existing QRIS order or transaction ID from this merchant and environment."
+        else:
+            state, message = adapter.check_qris_evidence(
+                connection=connection, credentials=credentials, reference=reference,
+            )
+    with transaction.atomic():
+        current = PaymentConnection.objects.select_for_update().get(pk=connection.pk, business=business)
+        if current.credentials_ciphertext != connection.credentials_ciphertext or current.verification_state == states.DISCONNECTED:
+            return False, "Credentials changed during verification. Review them and try again."
+        now = timezone.now()
+        if state == states.EVIDENCE and current.approval_reference:
+            state = states.VERIFIED
+            message = "Merchant and QRIS evidence verified. QRIS can be offered for this environment."
+        current.verified_at = now if state == states.VERIFIED else None
+        current.verification_state = state
+        current.last_verification_at = now
+        current.last_verification_result = message
+        current.save(update_fields=[
+            "verified_at", "verification_state", "last_verification_at", "last_verification_result", "updated_at",
+        ])
         AuditEvent.objects.create(
-            business=business,
-            actor=actor,
-            action="payment_connection.verified",
-            object_type="PaymentConnection",
-            object_id=str(connection.pk),
-            metadata={"provider": connection.provider},
+            business=business, actor=actor, action="payment_connection.verification_checked",
+            object_type="PaymentConnection", object_id=str(current.pk),
+            metadata={"provider": current.provider, "result": state},
         )
-    return valid, message
+    return state == states.VERIFIED, message
+
+
+def _qris_order_query(business, order_id, station_device, *, actor=None, lock=False):
+    orders = Order.objects.filter(business=business, pk=order_id)
+    if station_device is not None:
+        device = _station_session(station_device, "orders.view", lock=lock)
+        if device.station.business_id != business.pk:
+            raise PermissionError("This station belongs to another business")
+        if device.station.location_id:
+            orders = orders.filter(location_id=device.station.location_id)
+    elif actor is not None:
+        members = Membership.objects.filter(business=business, user=actor, user__is_active=True, active=True)
+        membership = (members.select_for_update(of=("self",)) if lock else members).first()
+        if not membership or not all(membership.allows(code) for code in ("orders.view", "orders.manage")):
+            raise PermissionError("You cannot initiate payments for this business")
+        orders = membership.scope_locations(orders)
+    return orders.select_for_update() if lock else orders
 
 
 def initiate_qris_payment(
     *, business, order_id, provider, actor=None, station_device=None, guest_tracking_token=None
 ):
+    from .payments.base import qris_start_time
+    from .payments.midtrans import MidtransStatusUnavailable
+
+    if guest_tracking_token is None and station_device is None and actor is None:
+        raise PermissionError("You cannot initiate payments for this business")
     if guest_tracking_token is not None:
-        pass
-    elif station_device is not None:
-        station_device = _station_session(station_device, "orders.view")
-        if station_device.station.business_id != business.pk:
-            raise PermissionError("This station belongs to another business")
-    else:
-        membership = Membership.objects.get(business=business, user=actor, active=True)
-        if not membership.allows("orders.view"):
-            raise PermissionError("You cannot initiate payments for this business")
+        actor = None
+    adapter = get_payment_adapter(provider)
 
-    with transaction.atomic():
-        order = Order.objects.select_for_update().get(business=business, pk=order_id)
-        if guest_tracking_token is not None:
-            token_digest = hashlib.sha256(guest_tracking_token.encode()).hexdigest()
-            if (
-                order.source not in Order.GUEST_SOURCES
-                or order.guest_tracking_digest != token_digest
-                or order.payment_method != Order.PaymentMethod.QRIS
-                or order.payment_provider != provider
+    while True:
+        with transaction.atomic():
+            order = _qris_order_query(business, order_id, station_device, actor=actor, lock=True).get()
+            if guest_tracking_token is not None:
+                token_digest = hashlib.sha256(guest_tracking_token.encode()).hexdigest()
+                if (
+                    order.source not in Order.GUEST_SOURCES
+                    or not hmac.compare_digest(order.guest_tracking_digest or "", token_digest)
+                    or order.payment_method != Order.PaymentMethod.QRIS
+                    or order.payment_provider != provider
+                ):
+                    raise PermissionError("This tracking link cannot access the payment")
+            if order.status in (Order.Status.COMPLETED, Order.Status.CANCELLED):
+                raise ValueError("Cannot initiate payment for completed or cancelled order")
+            if order.payment_status == Order.PaymentStatus.PAID:
+                raise ValueError("This order has already been paid")
+            if order.source in Order.GUEST_SOURCES and (
+                order.payment_method != Order.PaymentMethod.QRIS or order.payment_provider != provider
             ):
-                raise PermissionError("This tracking link cannot access the payment")
-        if order.status in (Order.Status.COMPLETED, Order.Status.CANCELLED):
-            raise ValueError("Cannot initiate payment for completed or cancelled order")
-        if order.payment_status == Order.PaymentStatus.PAID:
-            raise ValueError("This order has already been paid")
+                raise ValueError("This order uses a different payment method")
+            if order.total <= 0:
+                raise ValueError("QRIS requires a positive order total")
 
-        connection = PaymentConnection.objects.get(
-            business=business, provider=provider, verified_at__isnull=False
-        )
-        pending = order.payments.filter(
-            status=PaymentTransaction.Status.PENDING,
-            expires_at__gt=timezone.now(),
-            provider=provider,
-        ).first()
-        if pending:
-            return pending
-        expired = order.payments.filter(
-            status=PaymentTransaction.Status.PENDING, expires_at__lte=timezone.now()
-        )
-        if expired.exists():
-            expired.update(status=PaymentTransaction.Status.EXPIRED)
-            order.payment_status = Order.PaymentStatus.EXPIRED
-            order.save(update_fields=["payment_status", "updated_at"])
-            _queue_order_event(order, "payment_expired")
-        if order.payments.filter(status=PaymentTransaction.Status.PENDING).exists():
-            raise ValueError("An existing QRIS payment is still pending")
+            open_attempts = order.payments.filter(status__in=PaymentTransaction.TENDER_BLOCKING_STATUSES)
+            if open_attempts.filter(status=PaymentTransaction.Status.REVIEW).exists():
+                raise ValueError("Review the existing QRIS capture before taking another payment")
+            attempts = list(open_attempts.select_related("connection")[:2])
+            if len(attempts) > 1:
+                raise ValueError("Review the existing QRIS attempts with the provider")
+            attempt = attempts[0] if attempts else None
+            if attempt is not None:
+                if attempt.provider != provider:
+                    raise ValueError("An existing QRIS payment still needs confirmation")
+                if attempt.qr_available:
+                    return attempt
+                connection = attempt.connection
+            else:
+                try:
+                    connection = PaymentConnection.objects.select_for_update().get(
+                        business=business, provider=provider, verified_at__isnull=False,
+                    )
+                except PaymentConnection.DoesNotExist as error:
+                    raise ValueError("A verified QRIS connection is required") from error
+                started_at = qris_start_time()
+                attempt_id = uuid.uuid4()
+                reference = f"ORD-{attempt_id.hex}" if provider == PaymentConnection.Provider.MIDTRANS else attempt_id.hex
+                attempt = PaymentTransaction.objects.create(
+                    pk=attempt_id, business=business, order=order, connection=connection,
+                    provider=provider, environment=connection.environment,
+                    merchant_reference=reference,
+                    amount=order.total, status=PaymentTransaction.Status.INITIATING,
+                    expires_at=started_at + timedelta(minutes=10),
+                )
+                order.payment_status = Order.PaymentStatus.PENDING
+                order.save(update_fields=["payment_status", "updated_at"])
+                AuditEvent.objects.create(
+                    business=business, actor=actor, action="payment.initiated",
+                    object_type="PaymentTransaction", object_id=str(attempt.pk),
+                    metadata={"order_id": str(order.pk), "provider": provider,
+                              "amount": str(order.total), "merchant_reference": attempt.merchant_reference},
+                )
+                _queue_order_event(order, "payment_initiated")
+                break
+
+        if provider != PaymentConnection.Provider.MIDTRANS:
+            raise ValueError("Wait for BCA to confirm the earlier QRIS attempt before retrying")
         credentials = json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
+        try:
+            confirmed = adapter.transaction_status(
+                connection=connection, credentials=credentials, reference=attempt.merchant_reference,
+            )
+            adapter.verify_transaction(attempt, confirmed, allow_unbound=True)
+        except MidtransStatusUnavailable as error:
+            raise ValueError("The provider has not resolved the earlier QRIS attempt. Check again before taking payment.") from error
+        provider_id, _, _, status = adapter.parse_webhook_status(confirmed)
+        with transaction.atomic():
+            order = _qris_order_query(business, order_id, station_device, actor=actor, lock=True).get()
+            attempt = order.payments.select_for_update().get(pk=attempt.pk)
+            _apply_verified_qris_status(order, attempt, provider_id, status, confirmed)
+            if attempt.status in (PaymentTransaction.Status.PAID, PaymentTransaction.Status.REFUNDED):
+                return attempt
+        if attempt.status not in (PaymentTransaction.Status.FAILED, PaymentTransaction.Status.EXPIRED):
+            raise ValueError("The earlier QRIS attempt is still unresolved")
 
-        adapter = get_payment_adapter(provider)
-        result = adapter.create_qris(
-            connection=connection,
-            credentials=credentials,
-            order=order,
-            amount=order.total,
-            expiry_minutes=10,
-        )
-        if not result.success:
-            raise ValueError(result.error or "Failed to generate QRIS payment")
+    # Commit the order reservation before contacting the provider. Other checkout paths
+    # can see it while the provider replies, and can never send a competing charge.
+    credentials = json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
+    result = adapter.create_qris(
+        connection=connection, credentials=credentials, order=order, amount=order.total,
+        merchant_reference=attempt.merchant_reference, requested_at=started_at,
+    )
+    with transaction.atomic():
+        order = Order.objects.select_for_update().get(pk=order.pk)
+        attempt = order.payments.select_for_update().get(pk=attempt.pk)
+        if attempt.status in PaymentTransaction.COLLECTING_STATUSES:
+            attempt.raw_response = result.raw_response
+            attempt.save(update_fields=["raw_response", "updated_at"])
+            if result.success:
+                provider_id = result.transaction_id
+                qr_url = result.qr_image_url
+                qr_payload = result.qr_payload
+                if (
+                    isinstance(provider_id, str) and 0 < len(provider_id) <= 120
+                    and (not attempt.provider_transaction_id or attempt.provider_transaction_id == provider_id)
+                    and isinstance(qr_url, str) and len(qr_url) <= 500
+                    and isinstance(qr_payload, str) and (qr_payload or qr_url)
+                ):
+                    attempt.provider_transaction_id = provider_id
+                    attempt.qr_payload = qr_payload
+                    attempt.qr_image_url = qr_url
+                    attempt.status = PaymentTransaction.Status.PENDING
+                    attempt.save(update_fields=[
+                        "provider_transaction_id", "qr_payload", "qr_image_url", "status", "updated_at",
+                    ])
+            elif not result.uncertain and not attempt.provider_transaction_id:
+                _apply_verified_qris_status(order, attempt, "", PaymentTransaction.Status.FAILED)
 
-        tx = PaymentTransaction.objects.create(
-            business=business,
-            order=order,
-            connection=connection,
-            provider=provider,
-            environment=connection.environment,
-            provider_transaction_id=result.transaction_id,
-            merchant_reference=result.merchant_reference,
-            amount=result.amount,
-            currency=result.currency,
-            status=result.status,
-            qr_payload=result.qr_payload,
-            qr_image_url=result.qr_image_url,
-            expires_at=result.expires_at or (timezone.now() + timedelta(minutes=10)),
-            raw_response=result.raw_response,
-        )
-        order.payment_status = Order.PaymentStatus.PENDING
-        order.save(update_fields=["payment_status", "updated_at"])
+    if station_device is not None or actor is not None:
+        _qris_order_query(business, order_id, station_device, actor=actor).get()
+    if attempt.status in (PaymentTransaction.Status.PAID, PaymentTransaction.Status.REFUNDED):
+        return attempt
+    if attempt.qr_available:
+        return attempt
+    raise ValueError(result.error or "The QRIS attempt is awaiting verification. Check again before taking payment.")
+
+
+def _apply_verified_qris_status(order, attempt, provider_id, status, confirmed=None):
+    if provider_id and attempt.provider_transaction_id and provider_id != attempt.provider_transaction_id:
+        raise ValueError("Payment transaction reference changed.")
+    if attempt.status == PaymentTransaction.Status.REVIEW:
+        return
+    if status == PaymentTransaction.Status.REFUNDED and confirmed is None:
+        return
+
+    capture = status in (PaymentTransaction.Status.PAID, PaymentTransaction.Status.REFUNDED)
+    if capture and not provider_id:
+        raise ValueError("A confirmed payment requires a provider transaction ID.")
+    collecting = attempt.status in PaymentTransaction.COLLECTING_STATUSES
+    previous_capture = attempt.status in (PaymentTransaction.Status.PAID, PaymentTransaction.Status.REFUNDED)
+    if not capture and not collecting:
+        return
+    if status == PaymentTransaction.Status.PENDING:
+        if provider_id and not attempt.provider_transaction_id:
+            attempt.provider_transaction_id = provider_id
+            attempt.save(update_fields=["provider_transaction_id", "updated_at"])
+        return
+    if status not in (PaymentTransaction.Status.FAILED, PaymentTransaction.Status.EXPIRED) and not capture:
+        return
+
+    attempt.provider_transaction_id = provider_id or attempt.provider_transaction_id
+    if capture and not previous_capture:
+        attempt.paid_at = timezone.now()
+        if (
+            not collecting or order.payment_status == Order.PaymentStatus.PAID
+            or order.status == Order.Status.CANCELLED or hasattr(order, "tender")
+        ):
+            attempt.status = PaymentTransaction.Status.REVIEW
+            event = "payment.additional_capture"
+            _queue_order_event(order, "payment_review_required")
+        else:
+            attempt.status = PaymentTransaction.Status.PAID
+            order.payment_status = Order.PaymentStatus.PAID
+            order.payment_method = Order.PaymentMethod.QRIS
+            order.payment_provider = attempt.provider
+            order.save(update_fields=["payment_status", "payment_method", "payment_provider", "updated_at"])
+            event = ("payment.confirmed_from_refund" if status == PaymentTransaction.Status.REFUNDED
+                     else "payment.confirmed")
+            if status == PaymentTransaction.Status.PAID and order.status == Order.Status.NEW:
+                try:
+                    with transaction.atomic():
+                        _consume_order_recipe(order, None)
+                except ValueError:
+                    AuditEvent.objects.create(
+                        business=order.business, action="order.preparation_blocked",
+                        object_type="Order", object_id=str(order.pk), metadata={"reason": "recipe_stock"},
+                    )
+                else:
+                    order.status = Order.Status.PREPARING
+                    order.save(update_fields=["status", "updated_at"])
+                    route_order_to_stations(order)
+            _queue_order_event(order, "payment_confirmed")
+    elif not capture:
+        attempt.status = status
+        event = f"payment.{status}"
+        if order.payment_status != Order.PaymentStatus.PAID and not order.payments.filter(
+            status__in=PaymentTransaction.COLLECTING_STATUSES,
+        ).exclude(pk=attempt.pk).exists():
+            order.payment_status = status
+            order.save(update_fields=["payment_status", "updated_at"])
+            _queue_order_event(order, f"payment_{status}")
+    else:
+        event = None
+
+    if event:
+        attempt.save(update_fields=["status", "provider_transaction_id", "paid_at", "updated_at"])
         AuditEvent.objects.create(
-            business=business,
-            actor=actor,
-            action="payment.initiated",
-            object_type="PaymentTransaction",
-            object_id=str(tx.pk),
-            metadata={
-                "order_id": str(order.pk),
-                "provider": provider,
-                "amount": str(result.amount),
-                "merchant_reference": result.merchant_reference,
+            business=order.business, action=event, object_type="PaymentTransaction",
+            object_id=str(attempt.pk), metadata={
+                "order_id": str(order.pk), "amount": str(attempt.amount), "provider": attempt.provider,
             },
         )
-        _queue_order_event(order, "payment_initiated")
-    return tx
+    if status == PaymentTransaction.Status.REFUNDED and attempt.status != PaymentTransaction.Status.REVIEW:
+        from .refunds import apply_midtrans_refund_evidence
+
+        apply_midtrans_refund_evidence(order, attempt, confirmed)
 
 
 def process_payment_webhook(*, provider, headers, raw_body):
     body_bytes = raw_body if isinstance(raw_body, bytes) else str(raw_body).encode()
-    digest = hashlib.sha256(body_bytes).hexdigest()
-
+    digest = hashlib.sha256(provider.encode() + b":" + body_bytes).hexdigest()
     try:
-        payload = json.loads(body_bytes.decode("utf-8"))
-    except Exception as error:
-        raise ValueError(f"Invalid JSON webhook payload: {error}")
+        payload = json.loads(body_bytes)
+    except (ValueError, UnicodeError) as error:
+        raise ValueError("Invalid JSON payment notification.") from error
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid payment notification.")
 
     adapter = get_payment_adapter(provider)
-    provider_tx_id, merchant_ref, amount, status = adapter.parse_webhook_status(payload)
-
-    existing_event = PaymentWebhookEvent.objects.filter(request_digest=digest).first()
-    if existing_event and existing_event.processed:
-        tx = None
-        if merchant_ref:
-            tx = PaymentTransaction.objects.filter(merchant_reference=merchant_ref).first()
-        if not tx and provider_tx_id:
-            tx = PaymentTransaction.objects.filter(provider_transaction_id=provider_tx_id).first()
-        return tx
-
-    tx = None
+    provider_id, merchant_ref, amount, status = adapter.parse_webhook_status(payload)
+    if not all(isinstance(value, str) and len(value) <= 120 for value in (provider_id, merchant_ref)):
+        raise ValueError("Invalid payment transaction reference.")
+    matches = PaymentTransaction.objects.select_related("connection").filter(
+        provider=provider, connection__provider=provider, connection__business_id=models.F("business_id"),
+        order__business_id=models.F("business_id"), connection__environment=models.F("environment"),
+    )
     if merchant_ref:
-        tx = PaymentTransaction.objects.filter(merchant_reference=merchant_ref).first()
-    if not tx and provider_tx_id:
-        tx = PaymentTransaction.objects.filter(provider_transaction_id=provider_tx_id).first()
-
-    if not tx:
-        PaymentWebhookEvent.objects.create(
-            provider=provider,
-            request_digest=digest,
-            headers=headers,
-            payload=payload,
-            is_valid_signature=False,
-            error=f"No matching PaymentTransaction for ref '{merchant_ref}' or tx '{provider_tx_id}'",
-        )
-        raise ValueError("Payment transaction not found for webhook")
-
+        matches = matches.filter(merchant_reference=merchant_ref)
+    elif provider_id:
+        matches = matches.filter(provider_transaction_id=provider_id)
+    else:
+        raise ValueError("Missing payment transaction reference.")
+    found = list(matches[:2])
+    if len(found) != 1:
+        raise ValueError("Payment transaction could not be identified.")
+    tx = found[0]
     connection = tx.connection
     credentials = json.loads(_payment_fernet().decrypt(connection.credentials_ciphertext.encode()))
-    is_valid, sig_err = adapter.verify_webhook_signature(
-        connection=connection,
-        credentials=credentials,
-        payload=payload,
-        headers=headers,
-        raw_body=body_bytes,
+    valid, _ = adapter.verify_webhook_signature(
+        connection=connection, credentials=credentials, payload=payload, headers=headers, raw_body=body_bytes,
     )
+    evidence = {"transaction_id": tx.provider_transaction_id, "merchant_reference": tx.merchant_reference, "status": status}
+    if not valid:
+        invalid_digest = hashlib.sha256(f"rejected:{digest}".encode()).hexdigest()
+        PaymentWebhookEvent.objects.get_or_create(request_digest=invalid_digest, defaults={
+            "business": tx.business, "provider": provider, "payload": evidence, "error": "Invalid signature",
+        })
+        logger.warning("Rejected tenant payment signature", extra={"event": "payment.signature_rejected"})
+        raise PermissionError("Payment notification signature rejected.")
+    if not amount.is_finite() or amount != tx.amount or (
+        provider_id and tx.provider_transaction_id and provider_id != tx.provider_transaction_id
+    ):
+        raise ValueError("Payment notification does not match the original transaction.")
+    if provider == PaymentConnection.Provider.BCA_QRIS:
+        currency = payload.get("amount", {})
+        if not isinstance(currency, dict) or currency.get("currency", tx.currency) != tx.currency:
+            raise ValueError("Payment notification currency does not match the original transaction.")
 
-    if not is_valid:
-        PaymentWebhookEvent.objects.create(
-            business=tx.business,
-            provider=provider,
-            request_digest=digest,
-            headers=headers,
-            payload=payload,
-            is_valid_signature=False,
-            error=sig_err or "Invalid signature",
+    if (
+        status != PaymentTransaction.Status.REFUNDED
+        and tx.status in (
+            PaymentTransaction.Status.PAID, PaymentTransaction.Status.REFUNDED, PaymentTransaction.Status.REVIEW,
         )
-        raise PermissionError(f"Webhook signature rejected: {sig_err}")
+        and PaymentWebhookEvent.objects.filter(request_digest=digest, processed=True).exists()
+    ):
+        return tx
 
+    confirmed = None
+    if provider == PaymentConnection.Provider.MIDTRANS:
+        confirmed = adapter.transaction_status(
+            connection=connection, credentials=credentials, reference=tx.merchant_reference,
+        )
+        adapter.verify_transaction(tx, confirmed, allow_unbound=True)
+        provider_id, merchant_ref, amount, status = adapter.parse_webhook_status(confirmed)
     with transaction.atomic():
-        PaymentWebhookEvent.objects.create(
-            business=tx.business,
-            provider=provider,
-            request_digest=digest,
-            headers=headers,
-            payload=payload,
-            is_valid_signature=True,
-            processed=True,
-        )
+        # Order first is also the lock order for tender, checkout and refunds.
+        order = Order.objects.select_for_update().get(pk=tx.order_id, business=tx.business)
         tx = PaymentTransaction.objects.select_for_update().get(pk=tx.pk)
-        tx.status = status
-        if provider_tx_id and not tx.provider_transaction_id:
-            tx.provider_transaction_id = provider_tx_id
-
-        if status == "paid":
-            tx.paid_at = timezone.now()
-            order = Order.objects.select_for_update().get(pk=tx.order_id)
-            order.payment_status = Order.PaymentStatus.PAID
-            order.payment_method = Order.PaymentMethod.QRIS
-            order.payment_provider = provider
-            order.save(update_fields=["payment_status", "payment_method", "payment_provider", "updated_at"])
-            if order.status == Order.Status.NEW:
-                order.status = Order.Status.PREPARING
-                order.save(update_fields=["status"])
-                route_order_to_stations(order)
-            AuditEvent.objects.create(
-                business=tx.business,
-                actor=None,
-                action="payment.confirmed",
-                object_type="PaymentTransaction",
-                object_id=str(tx.pk),
-                metadata={
-                    "order_id": str(tx.order_id),
-                    "amount": str(tx.amount),
-                    "provider": provider,
-                },
-            )
-            _queue_order_event(order, "payment_confirmed")
-        elif status in ("failed", "expired"):
-            order = Order.objects.select_for_update().get(pk=tx.order_id)
-            order.payment_status = (
-                Order.PaymentStatus.FAILED if status == "failed" else Order.PaymentStatus.EXPIRED
-            )
-            order.save(update_fields=["payment_status", "updated_at"])
-            AuditEvent.objects.create(
-                business=tx.business,
-                actor=None,
-                action=f"payment.{status}",
-                object_type="PaymentTransaction",
-                object_id=str(tx.pk),
-                metadata={"order_id": str(tx.order_id), "provider": provider},
-            )
-            _queue_order_event(order, f"payment_{status}")
-
-        tx.save()
+        if tx.provider_transaction_id and provider_id and tx.provider_transaction_id != provider_id:
+            raise ValueError("Payment transaction reference changed.")
+        PaymentWebhookEvent.objects.get_or_create(request_digest=digest, defaults={
+            "business": tx.business, "provider": provider, "payload": {**evidence, "verified_status": status},
+            "is_valid_signature": True, "processed": True,
+        })
+        _apply_verified_qris_status(order, tx, provider_id, status, confirmed)
     return tx

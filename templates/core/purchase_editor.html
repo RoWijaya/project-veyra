@@ -6,7 +6,7 @@
   <div class="crumb"><a href="{% url 'purchases' business.slug %}">Purchase orders</a><span>/</span>{% if purchase %}{{ purchase.reference }}{% else %}New purchase{% endif %}</div>
   <div class="app-heading"><div><h1>{% if purchase %}Edit purchase draft{% else %}New purchase order{% endif %}</h1><p>Save a draft to review prices and totals before marking the purchase as ordered.</p></div></div>
   <form method="post" class="form-stack" data-purchase-editor>
-    {% csrf_token %}{{ header.revision }}{{ items.management_form }}
+    {% csrf_token %}{{ header.revision }}{{ header.revision.errors }}{{ items.management_form }}
     {{ header.non_field_errors }}{{ items.non_form_errors }}
     <section class="form-card">
       <h2>Delivery details</h2><div class="purchase-fields">

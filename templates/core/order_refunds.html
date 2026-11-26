@@ -1,0 +1,49 @@
+{% extends "core/base.html" %}
+{% block title %}Order refunds · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'order_receipt' business.slug order.pk %}">Receipt</a><span>/</span>Refunds</div>
+  <div class="app-heading"><div><h1>Order refunds</h1><p>Order {{ order.pk|stringformat:"s"|slice:":8" }} · {{ order.get_payment_method_display }}</p></div></div>
+  <div class="form-stack">
+  <section class="form-card">
+    <h2>Payment summary</h2>
+    <dl class="refund-summary">
+      <div><dt>Original payment</dt><dd>Rp {{ order.total|floatformat:"2g" }}</dd></div>
+      <div><dt>Refunded</dt><dd>Rp {{ refunded|floatformat:"2g" }}</dd></div>
+      {% if pending %}<div><dt>Awaiting confirmation</dt><dd>Rp {{ pending|floatformat:"2g" }}</dd></div>{% endif %}
+      {% if capture_available %}<div><dt>Available to refund</dt><dd>Rp {{ remaining|floatformat:"2g" }}</dd></div>{% endif %}
+    </dl>
+    {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+    {% if can_manage and capture_available and remaining > 0 %}
+    <form method="post" class="form-stack">
+      {% csrf_token %}<input type="hidden" name="action" value="refund">
+      {% for field in form.hidden_fields %}{{ field }}{% if field.errors %}<div class="form-error" role="alert">{{ field.errors }}</div>{% endif %}{% endfor %}
+      {% if is_qris %}<p class="field-hint">Midtrans will return the funds to the original payer after the provider confirms the refund.</p>
+      {% elif is_card %}<p class="field-hint">Complete the refund on the card terminal before recording it here.</p>
+      {% else %}<p class="field-hint">Return the cash to the customer before recording it here.</p>{% endif %}
+      {% for field in form.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
+      <div><button class="button button-dark">{% if is_qris %}Request QRIS refund{% else %}Record refund{% endif %}</button></div>
+    </form>
+    {% elif can_manage and not capture_available %}<p class="inline-empty">Refund recording is unavailable for this payment. Verify the original capture with the provider.</p>{% endif %}
+  </section>
+  <section class="form-card">
+    <h2>Refund history</h2>
+    {% for refund in page_obj %}
+      <details class="form-disclosure"{% if refund.status == "pending" %} open{% endif %}>
+        <summary>{{ refund.get_status_display }} · Rp {{ refund.amount|floatformat:"2g" }} · {{ refund.created_at|date:"d M Y H:i" }}</summary>
+        <p class="receipt-reference">{{ refund.reference }}</p><p>{{ refund.reason }}</p>
+        {% if refund.provider_reference %}<p>Payment reference {{ refund.provider_reference }}</p>{% endif %}
+        {% if refund.actor %}<p>Recorded by {{ refund.actor.get_full_name|default:refund.actor.email }}</p>{% endif %}
+        {% if can_manage and refund.payment_id and refund.status == "pending" %}
+          <form method="post" class="management-actions">{% csrf_token %}<input type="hidden" name="refund" value="{{ refund.pk }}">
+            <button class="button button-light" name="action" value="verify">Check provider status</button>
+            <button class="button button-light" name="action" value="retry">Retry same request</button>
+          </form>
+        {% endif %}
+      </details>
+    {% empty %}<p>No refunds recorded.</p>{% endfor %}
+    {% include "core/pagination.html" %}
+  </section>
+  </div>
+</section>
+{% endblock %}

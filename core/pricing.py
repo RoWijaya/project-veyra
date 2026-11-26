@@ -199,7 +199,7 @@ def price_order_items(*, business, items, location):
         business=business, product_ids=[item[0] for item in items],
         location=location, include_other_locations=location is None,
     )
-    products = business.products.filter(active=True).in_bulk(groups)
+    products = business.products.filter(active=True).select_related("category").in_bulk(groups)
     now = timezone.now()
     lines = []
     for product_id, quantity, selected in items:

@@ -122,7 +122,7 @@ Example body:
 {"status": "preparing"}
 ```
 
-The service validates the order's business/location scope and status transition.
+The service validates the order's business/location scope and status transition. A positive-balance order can become Ready while awaiting counter payment. The service requires recorded payment before completion.
 
 ### Rotate station bearer token
 
@@ -159,7 +159,7 @@ or
 {"status": "failed", "error": "Cutter jammed"}
 ```
 
-Updates print job status and timestamps.
+Updates print job status and timestamps. Preparation jobs accept Printing or a terminal acknowledgement while pending. A late or repeated acknowledgement leaves the terminal result unchanged. Explicit reprints receive a separate job ID. Device acknowledgement records the station's report.
 
 ### Reprint preparation ticket
 
@@ -176,7 +176,7 @@ Requires `orders.view`. Body:
 ```json
 {"provider": "midtrans"}
 ```
-or `{"provider": "bca_qris"}`. Generates a dynamic QRIS string and image URL with 10-minute expiry.
+or `{"provider": "bca_qris"}`. Returns provider QRIS data for the authorized order. Veyra derives location from the current station record and applies it to retries. An existing eligible QR is reused. An unresolved attempt retains its reference and blocks a new charge until the provider confirms a terminal result. The requested QR validity is ten minutes.
 
 ## Response and error behavior
 
@@ -192,5 +192,5 @@ The device API returns JSON. Typical status codes:
 
 ## Important limitations
 
-- No device-specific WebSocket consumer is present; browser-based KDS screens use HTTP polling or user-session WebSocket streams.
+- Paired devices use this HTTP API. The browser-based KDS uses a user-session WebSocket and refreshes its scoped queue after relevant updates. [Real-time authorization](REALTIME.md)
 - The API does not implement employee identity attribution; station-originated actions are associated with the paired device.

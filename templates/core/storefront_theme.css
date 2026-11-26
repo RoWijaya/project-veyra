@@ -1,0 +1,6 @@
+  --store-accent: {{ ordering_colors.accent }};
+  --store-on-accent: {{ ordering_colors.on_accent }};
+  --store-background: {{ ordering_colors.background }};
+  --store-text: {{ ordering_colors.text }};
+  --store-secondary: {{ ordering_colors.secondary }};
+  --store-focal: {{ ordering_design.focal_x }}% {{ ordering_design.focal_y }}%;

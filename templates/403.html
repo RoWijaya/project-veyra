@@ -1,0 +1,4 @@
+{% extends "core/error_page.html" %}
+{% block error_title %}Access restricted{% endblock %}
+{% block error_heading %}Access restricted{% endblock %}
+{% block error_description %}{% if access_message %}{{ access_message }}{% else %}Your account does not have access to this action. Ask the business owner to review your permissions.{% endif %}{% endblock %}

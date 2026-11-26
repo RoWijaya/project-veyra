@@ -1,5 +1,6 @@
 <fieldset class="purchase-line" data-purchase-line>
   <legend>Item</legend>
   {{ row.non_field_errors }}
-  <div class="purchase-fields">{% for field in row %}{% include "core/purchasing_field.html" %}{% endfor %}</div>
+  {% for field in row.hidden_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
+  <div class="purchase-fields">{% for field in row.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}</div>
 </fieldset>

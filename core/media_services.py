@@ -2,19 +2,18 @@ import io
 import warnings
 
 from django.db import transaction
-from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from .models import AuditEvent, Category, OrderingPage, OutboxEvent, Product, PromotionBanner
+from .models import AuditEvent, Category, OutboxEvent, Product, PromotionBanner
 from .pricing import promotion_is_in_window
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16_000_000
 
 
-def normalize_image(upload):
+def normalize_image(upload, *, preserve_alpha=False):
     if upload is None or upload.size > MAX_UPLOAD_BYTES:
         raise ValueError("Choose a JPEG, PNG or WebP image up to 5 MB.")
     try:
@@ -29,11 +28,15 @@ def normalize_image(upload):
                 image = ImageOps.exif_transpose(image)
                 image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
                 # Copy pixels to strip metadata and any appended content.
-                clean = Image.new("RGB", image.size, "white")
-                if "A" in image.getbands():
-                    clean.paste(image.convert("RGB"), mask=image.getchannel("A"))
+                if preserve_alpha:
+                    clean = Image.new("RGBA", image.size)
+                    clean.paste(image.convert("RGBA"))
                 else:
-                    clean.paste(image.convert("RGB"))
+                    clean = Image.new("RGB", image.size, "white")
+                    if "A" in image.getbands():
+                        clean.paste(image.convert("RGB"), mask=image.getchannel("A"))
+                    else:
+                        clean.paste(image.convert("RGB"))
                 output = io.BytesIO()
                 clean.save(output, format="WEBP", quality=85, method=4)
                 return output.getvalue()
@@ -52,12 +55,6 @@ def record_menu_change(request, business, obj, action):
         payload={"catalog_changed": isinstance(obj, (Category, Product))},
         next_attempt_at=timezone.now(),
     )
-
-
-def ordering_page_for(business):
-    return OrderingPage.objects.filter(business=business).defer("banner_content").annotate(
-        has_banner=Q(banner_content__isnull=False),
-    ).first()
 
 
 def banner_status(banner, at=None):

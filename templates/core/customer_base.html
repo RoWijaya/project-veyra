@@ -3,25 +3,35 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#33271f">
+  <meta name="theme-color" content="{% if ordering_customized %}{{ ordering_colors.accent }}{% else %}#33271f{% endif %}">
   <title>{% block title %}{{ store_name }} menu{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="{% static 'core/veyra-mark.svg' %}">
   <link rel="stylesheet" href="{% static 'core/site.css' %}">
   <link rel="stylesheet" href="{% static 'core/app-ui.css' %}">
   <link rel="stylesheet" href="{% static 'core/customer-ui.css' %}">
+  <link rel="stylesheet" href="{% static 'core/ordering-storefront.css' %}">
+  {% if storefront_style_nonce %}
+    <style nonce="{{ storefront_style_nonce }}" id="store-design">.storefront {
+      {% include "core/storefront_theme.css" %}
+    }</style>
+  {% else %}
+    <link rel="stylesheet" id="store-design" href="{{ ordering_theme_url }}">
+    {% if storefront_fragment %}<template id="store-design-source">{% include "core/storefront_theme.css" %}</template>{% endif %}
+  {% endif %}
 </head>
-<body class="storefront" data-customer-store data-menu-token="{{ table_token }}">
+<body class="storefront" data-customer-store data-menu-token="{{ table_token }}" data-ordering-customized="{{ ordering_customized|yesno:'true,false' }}"
+      data-menu-layout="{{ ordering_design.layout }}" data-menu-button="{{ ordering_design.button_style }}" data-menu-card="{{ ordering_design.card_style }}"{% if is_preview %} data-render-preview data-preview-request="{{ preview_request }}"{% endif %}>
   <a class="skip-link" href="#main-content">Skip to menu</a>
   <header class="store-header">
-    <a class="store-brand" id="store-brand" href="{{ menu_url }}">{{ store_name }}</a>
-    <a class="button button-light" href="{{ cart_url }}">Your order · <span data-cart-count>{{ cart_count }}</span></a>
+    <a class="store-brand" id="store-brand" href="{% if is_preview %}#main-content{% else %}{{ menu_url }}{% endif %}">{% if ordering_logo_url %}<img class="store-logo" src="{{ ordering_logo_url }}" alt="" width="36" height="36" data-media-image>{% elif ordering_page.has_logo %}<img class="store-logo" src="{% url 'guest_ordering_logo' table_token %}?v={{ ordering_asset_version|date:'U.u' }}" alt="" width="36" height="36" data-media-image>{% elif ordering_customized %}<span class="store-monogram" aria-hidden="true">{{ store_name|slice:":1" }}</span>{% endif %}<span>{{ store_name }}</span></a>
+    {% if is_preview %}<span class="button button-light">Your order · 0</span>{% else %}<a class="button button-light" href="{{ cart_url }}">Your order · <span data-cart-count>{{ cart_count }}</span></a>{% endif %}
   </header>
   <main id="main-content" tabindex="-1" class="store-main">
-    {% if messages %}<div aria-live="polite">{% for message in messages %}<p class="{% if message.tags == 'error' %}form-error{% else %}success-message{% endif %}">{{ message }}</p>{% endfor %}</div>{% endif %}
+    {% if not is_preview and messages %}<div aria-live="polite">{% for message in messages %}<p class="{% if message.tags == 'error' %}form-error{% else %}success-message{% endif %}">{{ message }}</p>{% endfor %}</div>{% endif %}
     {% if error %}<p class="form-error" role="alert" tabindex="-1">{{ error }}</p>{% endif %}
     {% if not subscription_allows_orders %}<p class="form-error" role="status">Ordering is temporarily unavailable. Please ask the team for help.</p>{% endif %}
     {% block content %}{% endblock %}
-    <p class="store-connection" data-store-connection role="status">Connecting to menu updates…</p>
+    {% if not is_preview %}<p class="store-connection" data-store-connection role="status">Connecting to menu updates…</p>{% endif %}
   </main>
   <footer class="store-footer">Ordering powered by Veyra</footer>
   <script src="{% static 'core/app-ui.js' %}" defer></script>

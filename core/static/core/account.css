@@ -3,13 +3,14 @@
 .account-header .wordmark { min-height: 44px; font-size: 24px; }
 .account-header-link, .account-inline-link { color: var(--coffee); display: inline-flex; align-items: center; min-height: 44px; text-decoration: underline; text-underline-offset: .22em; }
 .account-header-context { color: var(--muted); }
-.account-layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); width: min(100% - 2 * clamp(20px, 5vw, 80px), 1060px); min-height: min(70vh, 720px); align-content: center; margin-inline: auto; padding-block: clamp(38px, 9vh, 116px); }
+.account-layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); align-items: center; gap: clamp(24px, 5vw, 72px); width: min(100% - 2 * clamp(20px, 5vw, 80px), 970px); margin-inline: auto; padding-block: clamp(34px, 6vh, 80px); }
 .account-lead, .account-form-area { min-width: 0; }
-.account-lead { padding: clamp(12px, 3.5vw, 44px) clamp(24px, 5vw, 72px) 20px 0; }
-.account-lead .eyebrow { margin-bottom: 16px; }
+.account-lead { padding: 0; }
+.account-lead .eyebrow { margin-bottom: var(--space-3); }
 .account-lead h1, .account-security-heading h1 { font: 400 clamp(2.75rem, 6vw, 5.5rem)/.98 var(--serif); letter-spacing: -.055em; margin: 0 0 16px; text-wrap: balance; overflow-wrap: anywhere; }
+.account-lead h1 { font: 400 clamp(3.5rem, 6vw, 4.75rem)/.96 var(--display); letter-spacing: -.018em; text-wrap: initial; }
 .account-lead > p:not(.eyebrow), .account-security-heading > p:not(.eyebrow) { color: var(--muted); font-size: 1.0625rem; max-width: 40ch; line-height: 1.55; overflow-wrap: anywhere; }
-.account-form-area { align-self: start; padding: clamp(12px, 3.5vw, 44px) 0 clamp(12px, 3.5vw, 44px) clamp(32px, 5vw, 72px); border-inline-start: 1px solid var(--line-control); }
+.account-form-area { align-self: start; padding: clamp(22px, 3.5vw, 40px); background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-elevated); }
 .account-form-area .form-stack { gap: 16px; }
 .account-form-area .field { margin: 0; }
 .account-form-area .field input { font-size: 1rem; min-height: var(--control-height); }
@@ -29,23 +30,22 @@
 .account-state .account-lead { padding: 0; }
 .account-state .account-lead h1 { max-width: 20ch; text-wrap: initial; font-size: clamp(2.65rem, 6vw, 4.9rem); }
 .account-state .account-lead > p:not(.eyebrow) { max-width: 56ch; }
-.account-state .account-form-area { border-inline-start: 0; border-top: 1px solid var(--line); padding: 20px 0 0; }
+.account-state .account-form-area { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: var(--space-4) 0 0; }
 .account-state-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; }
 .account-state-actions form { margin: 0; }
 .account-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px 26px; border-top: 1px solid var(--line); padding-block: 18px; color: var(--muted); }
 .account-footer a { color: var(--ink); font-weight: 650; }
 .account-footer a:hover { text-decoration: underline; }
 @media (max-width: 740px) {
-  .account-layout { grid-template-columns: minmax(0, 1fr); max-width: 520px; min-height: auto; align-content: start; }
-  .account-lead { padding: 0; }
-  .account-form-area { padding: 22px 0 0; border-inline-start: 0; border-top: 1px solid var(--line); }
-  .account-lead h1 { text-wrap: initial; }
+  .account-layout { grid-template-columns: minmax(0, 1fr); max-width: 480px; min-height: auto; padding-block: var(--space-8); }
+  .account-form-area { padding: 0; background: none; border: 0; }
+  .account-lead h1 { font-size: clamp(3.25rem, 13vw, 4.25rem); }
   .account-header { min-height: 66px; }
 }
 
-.account-security-page { width: min(100% - 2 * clamp(20px, 5vw, 80px), 1100px); margin-inline: auto; padding-block: clamp(32px, 7vw, 76px); }
+.account-security-page { width: min(100% - 2 * clamp(20px, 5vw, 80px), 1100px); margin-inline: auto; padding-block: clamp(28px, 5vw, 64px); }
 .account-security-heading nav { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-bottom: 16px; }
-.account-security-heading h1 { font-size: clamp(2.75rem, 6vw, 5rem); }
+.account-security-heading h1 { font: 400 clamp(2.9rem, 6vw, 4.75rem)/.98 var(--display); letter-spacing: -.018em; }
 .account-method { display: grid; grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr); min-width: 0; gap: 24px clamp(24px, 5vw, 72px); border-top: 1px solid var(--line-control); padding-block: clamp(22px, 4vw, 42px); }
 .account-method > *, .authenticator-steps > * { min-width: 0; }
 .account-method h2, .recovery-notice h2 { margin: 0 0 12px; font: 400 clamp(1.85rem, 3vw, 2.55rem)/1.05 var(--serif); letter-spacing: -.036em; }

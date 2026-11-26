@@ -2,18 +2,19 @@
 <div class="field multi-picker" data-multi-picker data-singular="{{ singular }}" data-plural="{{ plural }}">
   <label id="{{ field.auto_id }}_label" for="{{ field.id_for_label }}">{{ field.label }}</label>
   {{ field }}
+  {% if not single %}<noscript><p class="field-hint">Use your browser’s multiple-selection controls to choose more than one.</p></noscript>{% endif %}
   <div data-picker hidden>
     <div class="multi-picker-selection" data-selection hidden>
       <div class="multi-picker-chips" data-chips></div>
       <button class="text-button multi-picker-clear" type="button" data-clear
-              aria-label="Clear all selected {{ plural }}" hidden>Clear all</button>
+              aria-label="Clear {% if single %}selected {{ singular }}{% else %}all selected {{ plural }}{% endif %}" hidden>Clear{% if not single %} all{% endif %}</button>
     </div>
     <button class="button button-light multi-picker-toggle" type="button" id="{{ field.auto_id }}_toggle" data-toggle
             aria-expanded="false" aria-controls="{{ field.auto_id }}_panel"
             aria-labelledby="{{ field.auto_id }}_label {{ field.auto_id }}_summary"
             {% if hint_id or field.help_text or field.errors %}aria-describedby="{% if hint_id %}{{ hint_id }} {% endif %}{% if field.help_text %}{{ field.auto_id }}_helptext {% endif %}{% if field.errors %}{{ field.auto_id }}_error{% endif %}"{% endif %}
             {% if field.errors %}aria-invalid="true"{% endif %}>
-      <span id="{{ field.auto_id }}_summary" data-summary>Choose {{ plural }}</span>
+      <span id="{{ field.auto_id }}_summary" data-summary>Choose {% if single %}a {{ singular }}{% else %}{{ plural }}{% endif %}</span>
       <span class="multi-picker-chevron" aria-hidden="true"></span>
     </button>
     <div class="multi-picker-panel" id="{{ field.auto_id }}_panel" data-panel hidden>
@@ -21,7 +22,7 @@
       <input type="search" id="{{ field.auto_id }}_search" data-search placeholder="Search {{ plural }}"
              autocomplete="off" spellcheck="false" aria-controls="{{ field.auto_id }}_options">
       <div class="multi-picker-options" id="{{ field.auto_id }}_options" data-options role="listbox"
-           aria-labelledby="{{ field.auto_id }}_label" aria-multiselectable="true"></div>
+           aria-labelledby="{{ field.auto_id }}_label"{% if not single %} aria-multiselectable="true"{% endif %}></div>
       <p class="multi-picker-empty" data-no-matches hidden>No matching {{ plural }}.</p>
     </div>
     <p class="sr-only" role="status" data-picker-status></p>

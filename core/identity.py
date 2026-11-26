@@ -5,7 +5,7 @@ import time
 import pyotp
 from authlib.integrations.django_client import OAuth
 from channels.db import database_sync_to_async
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 from django.conf import settings
 from django.contrib.auth import login
 from django.core.cache import cache
@@ -37,7 +37,7 @@ def account_cipher():
         raise ValueError(
             "Authenticator encryption is not configured. Contact the platform administrator."
         )
-    return Fernet(key.encode())
+    return MultiFernet([Fernet(value.encode()) for value in [key, *settings.ACCOUNT_SECURITY_ENCRYPTION_FALLBACK_KEYS]])
 
 
 def local_next(request, value):
@@ -141,6 +141,7 @@ class MFAWebsocketMiddleware:
                     return current_session.get("mfa_version") == str(factor.version)
                 return not privileged_required(current_user)
 
+            scope["veyra_session_authorized"] = allowed
             if not await allowed():
                 await send({"type": "websocket.close", "code": 4403})
                 return

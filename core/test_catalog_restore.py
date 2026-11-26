@@ -15,6 +15,19 @@ def photo(color="red", content_type="image/png"):
     return SimpleUploadedFile("sample.png", stream.getvalue(), content_type)
 
 
+
+def publish_ordering_design(client, url, data):
+    """Exercise the current editor workflow while retaining the guest-media assertions."""
+    revision = int(client.get(url).context["form"]["revision"].value())
+    response = client.post(url, {
+        "show_images": "on", "show_descriptions": "on",
+        **data, "revision": revision, "action": "save",
+    })
+    if response.status_code != 302:
+        return response
+    return client.post(url, {"revision": revision + 1, "action": "publish"})
+
+
 class CatalogRestoreTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user("catalog-restore-owner@example.invalid")
@@ -128,7 +141,7 @@ class CatalogRestoreTests(TestCase):
         upload = {"display_name": "Cedar Kitchen", "introduction": "Baked each morning", "banner_alt": "Our bakery"}
         self.assertContains(self.client.get("/app/cedar-cafe/settings/"), "Ordering page")
         self.assertContains(self.client.get(self.settings), "Preview guest menu")
-        self.assertRedirects(self.client.post(self.settings, {**upload, "image": photo()}), self.settings)
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {**upload, "image": photo()}), self.settings)
         banner_url = f"{self.menu}ordering-banner/"
         self.assertContains(self.guest.get(self.menu), "Cedar Kitchen")
         self.assertContains(self.guest.get(self.menu), "Baked each morning")
@@ -137,23 +150,51 @@ class CatalogRestoreTests(TestCase):
         self.assertEqual(original["Content-Type"], "image/webp")
         self.assertIn("no-store", original["Cache-Control"])
         self.assertContains(self.client.get(self.settings), "Current banner")
-        self.assertRedirects(self.client.post(self.settings, {**upload, "image": photo("blue")}), self.settings)
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {**upload, "image": photo("blue")}), self.settings)
         self.assertNotEqual(self.guest.get(banner_url).content, original.content)
-        self.assertRedirects(self.client.post(self.settings, {**upload, "remove_image": "on"}), self.settings)
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {**upload, "remove_image": "on"}), self.settings)
         self.assertEqual(self.guest.get(banner_url).status_code, 404)
         guest_menu = self.guest.get(self.menu)
         self.assertNotContains(guest_menu, banner_url)
         self.assertContains(guest_menu, "Cedar Kitchen")
 
+    def test_ordering_logo_is_independent_of_the_banner_and_uses_the_current_menu_link(self):
+        logo = self.menu + "ordering-logo/"
+        saved = publish_ordering_design(self.client, self.settings, {
+            "display_name": "Cedar Counter",
+            "image": photo("red"),
+            "logo": photo("blue"),
+        })
+        self.assertRedirects(saved, self.settings)
+        guest_menu = self.guest.get(self.menu)
+        self.assertContains(guest_menu, "Cedar Counter")
+        self.assertContains(guest_menu, "ordering-logo/")
+        self.assertContains(guest_menu, "ordering-banner/")
+        response = self.guest.get(logo)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/webp")
+        self.assertIn("no-store", response["Cache-Control"])
+        baseline = response.content
+
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {"logo": photo("green")}), self.settings)
+        self.assertNotEqual(self.guest.get(logo).content, baseline)
+        rejected = publish_ordering_design(self.client, self.settings, {
+            "logo": SimpleUploadedFile("invalid.png", b"invalid image", "image/png"),
+        })
+        self.assertContains(rejected, "The image could not be read.", status_code=400)
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {"remove_logo": "on"}), self.settings)
+        self.assertEqual(self.guest.get(logo).status_code, 404)
+        self.assertEqual(self.guest.get(self.menu + "ordering-banner/").status_code, 200)
+
     def test_ordering_page_blocks_foreign_tenants_catalog_staff_and_invalid_media(self):
         foreign_owner = User.objects.create_user("ordering-foreign@example.invalid")
         foreign = create_business(owner=foreign_owner, name="Far café", slug="far-cafe")
         self.assertEqual(self.client.post("/app/far-cafe/settings/ordering-page/", {"display_name": "Forged"}).status_code, 404)
-        self.assertContains(self.client.post(self.settings, {
+        self.assertContains(publish_ordering_design(self.client, self.settings, {
             "display_name": "Spoofed", "image": SimpleUploadedFile("fake.webp", b"<svg/>", "image/webp"),
         }), "The image could not be read", status_code=400)
         self.assertNotContains(self.guest.get(self.menu), "Spoofed")
-        self.assertRedirects(self.client.post(self.settings, {
+        self.assertRedirects(publish_ordering_design(self.client, self.settings, {
             "display_name": "Our storefront", "image": photo(),
         }), self.settings)
         foreign_location = Location.objects.create(business=foreign, name="Other location")

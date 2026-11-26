@@ -3,35 +3,55 @@
 {% block content %}
 <section class="app-page">
   <div class="crumb"><a href="{% url 'business_dashboard' business.slug %}">{{ business.name }}</a><span>/</span>Promotions</div>
-  <div class="app-heading"><div><h1>Menu banners</h1><p>Manage the offers guests see on your menu.</p></div></div>
-  <nav class="management-actions" aria-label="Promotions"><a class="button button-light" href="{% url 'promotions' business.slug %}">Pricing rules</a><a class="button button-dark" href="{% url 'banners' business.slug %}" aria-current="page">Menu banners</a></nav>
-  <div class="promotion-layout">
-    <section>
+  <div class="app-heading"><div><h1>Menu banners</h1><p>Manage the offers guests see on your menu.</p></div>{% if can_manage and not editing %}<a class="button button-light" href="#campaign-banner-editor">Create banner</a>{% endif %}</div>
+  <nav class="catalog-actions" aria-label="Promotions"><a class="button button-light" href="{% url 'promotions' business.slug %}">Pricing rules</a><a class="button button-dark" href="{% url 'banners' business.slug %}" aria-current="page">Menu banners</a></nav>
+  <div class="report-grid">
+    <section class="campaign-banner-list" aria-label="Saved banners">
       {% for banner in banners %}
       <article class="form-card">
         <img class="banner-preview" src="{% url 'banner_image' business.slug banner.pk %}" alt="{{ banner.alt_text }}" width="640" height="256" loading="lazy" data-media-image>
         <p class="status-badge">{{ banner.display_status }}</p>
         <h2>{{ banner.headline }}</h2><p>{{ banner.description }}</p>
         <p>Button label · {{ banner.cta_text }}</p>
-        <p>{{ banner.starts_at|default:"Available immediately" }} — {{ banner.ends_at|default:"No end date" }}</p>
+        <p>{{ banner.starts_at|date:"d M Y H:i"|default:"Available immediately" }} — {{ banner.ends_at|date:"d M Y H:i"|default:"No end date" }}</p>
         {% if can_manage %}<a class="button button-light" href="{% url 'banner_edit' business.slug banner.pk %}">Edit banner</a>{% endif %}
       </article>
       {% empty %}<div class="inline-empty"><h2>No banners yet</h2><p>Create a banner for a product, category or scheduled promotion.</p></div>{% endfor %}
     </section>
-    {% if can_manage %}<section class="form-card"><h2>{% if editing %}Edit banner{% else %}Create banner{% endif %}</h2>
+    {% if can_manage %}<section class="form-card" id="campaign-banner-editor" tabindex="-1"><h2>{% if editing %}Edit banner{% else %}Create banner{% endif %}</h2>
       <form method="post" enctype="multipart/form-data" class="form-stack" data-media-form>
         {% csrf_token %}{{ form.non_field_errors }}
-        <p>Choose one link target. Image uploads support JPEG, PNG and WebP up to 5 MB.</p>
-        {% for field in form %}{% if field.name != "starts_at" and field.name != "ends_at" and field.name != "locations" and field.name != "priority" %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endfor %}
+        {% include "core/purchasing_field.html" with field=form.headline %}
+        {% include "core/purchasing_field.html" with field=form.description %}
+        <fieldset class="catalog-media">
+          <legend>Artwork</legend>
+          {% if editing %}<figure data-current-image><img class="banner-preview" src="{% url 'banner_image' business.slug editing.pk %}" alt="{{ editing.alt_text }}" width="640" height="256" data-media-image><figcaption class="field-hint">Current campaign banner</figcaption></figure>{% endif %}
+          <img class="media-preview ordering-banner-preview" data-upload-preview alt="Selected image preview" width="480" height="320" hidden>
+          {% include "core/purchasing_field.html" with field=form.image %}
+          {% include "core/purchasing_field.html" with field=form.alt_text %}
+        </fieldset>
+        {% include "core/purchasing_field.html" with field=form.cta_text %}
+        <fieldset class="catalog-media">
+          <legend>Link destination</legend>
+          <p class="field-hint">Choose one product, category or promotion.</p>
+          {% include "core/multi_picker.html" with field=form.product singular="product" plural="products" single=True %}
+          {% include "core/multi_picker.html" with field=form.category singular="category" plural="categories" single=True %}
+          {% include "core/multi_picker.html" with field=form.promotion singular="promotion" plural="promotions" single=True %}
+        </fieldset>
         <details class="form-disclosure" {% if form.errors %}open{% endif %}><summary>Schedule & locations</summary>
-          <p>Times use {{ business.timezone_name }}. Leave locations empty to include every location. Hold Ctrl or Command to choose several locations.</p>
-          {% for field in form %}{% if field.name == "starts_at" or field.name == "ends_at" or field.name == "locations" or field.name == "priority" %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endfor %}
+          <p class="field-hint">Times use {{ business.timezone_name }}. Leave locations empty to include every location.</p>
+          <div class="purchase-fields">
+            {% include "core/purchasing_field.html" with field=form.starts_at %}
+            {% include "core/purchasing_field.html" with field=form.ends_at %}
+          </div>
+          {% include "core/multi_picker.html" with field=form.locations singular="location" plural="locations" %}
+          {% include "core/purchasing_field.html" with field=form.priority %}
         </details>
-        {% if editing %}<figure data-current-image><img class="banner-preview" src="{% url 'banner_image' business.slug editing.pk %}" alt="{{ editing.alt_text }}" width="640" height="256" data-media-image><figcaption class="field-hint">Current campaign banner</figcaption></figure>{% endif %}
-        <img class="media-preview ordering-banner-preview" data-upload-preview alt="Selected image preview" width="480" height="320" hidden>
+        {% include "core/purchasing_field.html" with field=form.active %}
         <div class="management-actions"><button class="button button-dark">Save banner</button>{% if editing %}<a class="button button-light" href="{% url 'banners' business.slug %}">Cancel editing</a>{% endif %}</div>
       </form>
     </section>{% endif %}
   </div>
 </section>
+{% if can_manage %}{% include "core/multi_picker_assets.html" %}{% endif %}
 {% endblock %}

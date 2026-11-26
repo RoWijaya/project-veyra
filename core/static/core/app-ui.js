@@ -78,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const usedIds = new Set();
-  document.querySelectorAll(".field input, .field select, .field textarea").forEach((input, index) => {
+  document.querySelectorAll(".field input:not([data-search]), .field select, .field textarea").forEach((input, index) => {
     const field = input.closest(".field");
     const originalId = input.id;
     if (!input.id || usedIds.has(input.id)) input.id = `${input.id || "field"}-${index}`;
@@ -90,17 +90,39 @@ document.addEventListener("DOMContentLoaded", () => {
     const notes = field.querySelectorAll("small, .field-error, .field-hint, .errorlist");
     const noteIds = new Set();
     notes.forEach((note, noteIndex) => {
-      if (!note.id || noteIds.has(note.id) || originalId !== input.id) note.id = `${input.id}-note-${noteIndex}`;
+      if (!note.id || noteIds.has(note.id) || originalId !== input.id) {
+        describedBy.delete(note.id);
+        note.id = `${input.id}-note-${noteIndex}`;
+      }
       noteIds.add(note.id);
       describedBy.add(note.id);
       if (note.matches(".field-error, .errorlist")) input.setAttribute("aria-invalid", "true");
     });
     if (describedBy.size) input.setAttribute("aria-describedby", [...describedBy].join(" "));
   });
-  const error = document.querySelector(".form-error[role=alert], .form-error-summary");
-  if (error && error.textContent.trim()) {
+  document.querySelectorAll("[data-provider-form]").forEach((form) => {
+    const provider = form.elements.provider;
+    const updateFields = () => {
+      for (const group of form.querySelectorAll("[data-provider-fields]")) {
+        group.hidden = group.dataset.providerFields !== provider.value;
+        for (const input of group.querySelectorAll("input")) input.disabled = group.hidden;
+      }
+    };
+    provider.addEventListener("change", updateFields);
+    window.addEventListener("pageshow", updateFields);
+    updateFields();
+  });
+
+  const error = [...document.querySelectorAll(".form-error-summary, .form-error[role=alert], .errorlist.nonfield")]
+    .find((element) => element.textContent.trim() && element.getClientRects().length);
+  if (error) {
     error.tabIndex = -1;
+    error.setAttribute("role", "alert");
     error.focus();
+  } else {
+    const invalid = [...document.querySelectorAll("form [aria-invalid=true]")]
+      .find((element) => element.matches("input, select, textarea, button") && element.getClientRects().length);
+    invalid?.focus();
   }
 
   document.querySelectorAll("[data-password-control]").forEach((control) => {
@@ -128,17 +150,36 @@ document.addEventListener("DOMContentLoaded", () => {
     if (image.complete && !image.naturalWidth) hideMissingImage(image);
   });
 
-  document.querySelectorAll("[data-media-form]").forEach((form) => {
+  document.querySelectorAll("[data-media-form] [data-upload-preview]").forEach((preview) => {
+    const form = preview.closest("[data-upload-field], [data-media-form]");
     const input = form.querySelector('input[type="file"]');
-    const preview = form.querySelector("[data-upload-preview]");
     const current = form.querySelector("[data-current-image]");
+    const feedback = form.querySelector("[data-upload-feedback]");
+    if (!input || !preview) return;
+    const setFeedback = (message = "", error = false) => {
+      if (!feedback) return;
+      feedback.textContent = message;
+      feedback.toggleAttribute("data-preview-error", error);
+    };
     input.addEventListener("change", () => {
       const file = input.files[0];
       preview.hidden = true;
       preview.removeAttribute("src");
       if (current) current.hidden = false;
-      if (!file || file.size > 5 * 1024 * 1024 || (file.type && !["image/jpeg", "image/png", "image/webp"].includes(file.type))) return;
+      setFeedback();
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) {
+        setFeedback("Choose an image under 5 MB.", true);
+        return;
+      }
+      if (file.type && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        setFeedback("Choose a JPEG, PNG or WebP image.", true);
+        return;
+      }
       const reader = new FileReader();
+      reader.addEventListener("error", () => {
+        if (input.files[0] === file) setFeedback("Could not read this image. Choose it again or select another.", true);
+      });
       reader.addEventListener("load", () => {
         if (input.files[0] === file) preview.src = reader.result;
       });
@@ -147,10 +188,12 @@ document.addEventListener("DOMContentLoaded", () => {
     preview.addEventListener("load", () => {
       preview.hidden = false;
       if (current) current.hidden = true;
+      setFeedback("Preview ready. Save to apply this image.");
     });
     preview.addEventListener("error", () => {
       preview.hidden = true;
       if (current) current.hidden = false;
+      if (input.files.length) setFeedback("Could not preview this image. Choose another file.", true);
     });
   });
 
@@ -163,16 +206,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const form = event.target;
     const prompt = form.dataset.confirm || (
       form.hasAttribute("data-confirm-cancel") && form.querySelector("[name=status]")?.value === "cancelled"
-        ? "Cancel this order? This action will be recorded in order history." : ""
+        ? "Cancel this order? To return a payment, record a separate refund from its receipt." : ""
     );
     if (form.dataset.submitting || (prompt && !window.confirm(prompt))) {
       event.preventDefault();
       return;
     }
-    if (form.getAttribute("method")?.toLowerCase() !== "post") return;
+    const submitter = event.submitter;
+    const target = submitter?.getAttribute("formtarget") || form.getAttribute("target");
+    // A submission into another frame does not navigate this document.
+    if (form.getAttribute("method")?.toLowerCase() !== "post" || (target && target !== "_self")) return;
     form.dataset.submitting = "true";
     form.setAttribute("aria-busy", "true");
-    const submitter = event.submitter;
     if (submitter) submitter.setAttribute("aria-disabled", "true");
     const progress = document.createElement("p");
     progress.className = "form-progress sr-only";
@@ -200,6 +245,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if ((station || orderDesk) && window.WebSocket) {
     const queueSelector = station ? "[data-station-queue]" : "[data-order-stream]";
     const queue = document.querySelector(queueSelector);
+    const queueUrl = window.location.href;
     const status = station?.querySelector("[data-station-connection]") || document.createElement("p");
     const businessSlug = station?.dataset.stationScreen || orderDesk.dataset.orderStream;
     if (orderDesk) {
@@ -215,13 +261,13 @@ document.addEventListener("DOMContentLoaded", () => {
     let timer;
     let delay = 1000;
     let connected = false;
+    let queueRequest;
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "button button-small";
     retry.textContent = "Retry synchronization";
     retry.hidden = true;
     status.after(retry);
-    let queueRequest;
     const stationContent = (section) => JSON.stringify([
       Array.from(section.querySelectorAll(".station-ticket"), (ticket) => [
         ticket.dataset.orderId, ticket.textContent,
@@ -232,15 +278,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (stopped) return;
       if (pending) { queued = true; return; }
       pending = true;
-      queueRequest = new AbortController();
       try {
         do {
           queued = false;
-          const response = await fetch(window.location.href, {
+          queueRequest = new AbortController();
+          const response = await fetch(queueUrl, {
             cache: "no-store", headers: { Accept: "text/html" }, signal: queueRequest.signal,
           });
+          if (stopped) return;
           if (!response.ok || response.redirected) throw new Error("Unavailable");
-          const snapshot = new DOMParser().parseFromString(await response.text(), "text/html");
+          const html = await response.text();
+          if (stopped) return;
+          const snapshot = new DOMParser().parseFromString(html, "text/html");
           const next = snapshot.querySelector(queueSelector);
           if (!next) throw new Error("No access");
           if (station && stationContent(queue) === stationContent(next)) {
@@ -279,7 +328,7 @@ document.addEventListener("DOMContentLoaded", () => {
           retry.hidden = true;
         } while (queued && !stopped);
       } catch (error) {
-        if (stopped || queueRequest.signal.aborted) return;
+        if (stopped) return;
         status.textContent = "Queue synchronization failed. Orders shown may be out of date.";
         retry.hidden = false;
       } finally { pending = false; }
@@ -290,17 +339,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${location.host}/ws/business/${encodeURIComponent(businessSlug)}/orders/`);
       socket.addEventListener("open", () => {
+        if (stopped) return;
         delay = 1000;
         if (connected && orderDesk) document.dispatchEvent(new Event("veyra:catalog-updated"));
         connected = true;
         recover();
       });
       socket.addEventListener("message", (message) => {
+        if (stopped) return;
         try {
           const update = JSON.parse(message.data);
           if (orderDesk && update.event === "catalog.changed") document.dispatchEvent(new Event("veyra:catalog-updated"));
-          // Cash or card tender does not change the kitchen ticket or its actions.
-          if (update.order_id && !(station && update.event === "payment_recorded")) recover();
+          if (update.order_id) recover();
         } catch (error) { /* Ignore malformed frames. */ }
       });
       socket.addEventListener("close", (event) => {
@@ -314,9 +364,9 @@ document.addEventListener("DOMContentLoaded", () => {
     connect();
     const pauseQueue = () => {
       stopped = true;
-      queueRequest?.abort();
       clearTimeout(timer);
-      socket?.close();
+      queueRequest?.abort();
+      if (socket?.readyState === WebSocket.OPEN) socket.close();
     };
     document.addEventListener("submit", (event) => {
       if (event.defaultPrevented) return;
@@ -328,5 +378,88 @@ document.addEventListener("DOMContentLoaded", () => {
       stopped = false;
       connect();
     });
+  }
+
+  // Promotion Schedule & Recurrence
+  const scheduleDisclosure = document.getElementById("schedule-disclosure");
+  if (scheduleDisclosure) {
+    const permanentCheckbox = document.getElementById("id_permanent_offer");
+    const datesCard = document.getElementById("offer-period-card");
+    const datesBadge = document.getElementById("offer-period-badge");
+    const startDate = document.getElementById("id_start_date");
+    const endDate = document.getElementById("id_end_date");
+
+    const updatePermanentState = () => {
+      if (!permanentCheckbox) return;
+      const isPermanent = permanentCheckbox.checked;
+      if (startDate) startDate.disabled = isPermanent;
+      if (endDate) endDate.disabled = isPermanent;
+      if (datesCard) {
+        datesCard.classList.toggle("is-disabled", isPermanent);
+      }
+      if (datesBadge) {
+        if (isPermanent) {
+          datesBadge.textContent = "Permanent";
+          datesBadge.classList.remove("is-active");
+        } else {
+          datesBadge.textContent = "Date limited";
+          datesBadge.classList.add("is-active");
+        }
+      }
+    };
+
+    if (permanentCheckbox) {
+      permanentCheckbox.addEventListener("change", updatePermanentState);
+      updatePermanentState();
+    }
+
+    const validateDates = () => {
+      if (!startDate || !endDate) return;
+      if (startDate.value && endDate.value && endDate.value < startDate.value) {
+        endDate.setCustomValidity("Ends on must be on or after Starts on.");
+      } else {
+        endDate.setCustomValidity("");
+      }
+    };
+    if (startDate) startDate.addEventListener("change", validateDates);
+    if (endDate) endDate.addEventListener("change", validateDates);
+
+    const weekdayInputs = Array.from(scheduleDisclosure.querySelectorAll(".weekday-input"));
+    const weekdaySummary = document.getElementById("weekday-selection-summary");
+    const selectAllBtn = document.getElementById("weekday-select-all");
+    const clearAllBtn = document.getElementById("weekday-clear-all");
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    const updateWeekdaySummary = () => {
+      if (!weekdaySummary) return;
+      const checked = weekdayInputs.filter((i) => i.checked);
+      if (checked.length === 0) {
+        weekdaySummary.textContent = "Available every day (unrestricted)";
+      } else if (checked.length === 7) {
+        weekdaySummary.textContent = "Available every day";
+      } else {
+        const names = checked.map((i) => dayNames[parseInt(i.value, 10)]).filter(Boolean);
+        weekdaySummary.textContent = `Available on ${names.join(", ")}`;
+      }
+    };
+
+    weekdayInputs.forEach((input) => {
+      input.addEventListener("change", updateWeekdaySummary);
+    });
+    updateWeekdaySummary();
+
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener("click", () => {
+        weekdayInputs.forEach((input) => { input.checked = true; });
+        updateWeekdaySummary();
+      });
+    }
+
+    if (clearAllBtn) {
+      clearAllBtn.addEventListener("click", () => {
+        weekdayInputs.forEach((input) => { input.checked = false; });
+        updateWeekdaySummary();
+      });
+    }
   }
 });

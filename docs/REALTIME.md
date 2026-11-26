@@ -1,67 +1,28 @@
-# Realtime order events
+# Real-time events
 
-## Current implementation
+[Architecture](ARCHITECTURE.md) · [Socket endpoint index](FEATURES-AND-ROUTES.md#websocket-endpoints)
 
-The project uses Django Channels and a Redis channel layer when Channels is installed and the application is not in SQLite test mode. The ASGI application routes business order streams, private guest order tracking, and signed table QR or location pickup menu streams.
+## Delivery path
 
-WebSocket URL:
+1. A service changes the authoritative PostgreSQL state and creates the corresponding outbox event in its transaction.
+2. ``process_outbox`` scans pending events, dispatches due events to Redis Channels, and retries failures. Its loop also checks promotion and campaign banner boundaries. It handles optional private media copies by event type.
+3. Channels consumers send scoped events or snapshots. Browser code updates the live region or refreshes the authorized representation after the event. On reconnect, each supported client reloads the relevant current state.
 
-```text
-ws/business/<business-slug>/orders/
-```
-
-Additional streams are `ws/guest/orders/<order-uuid>/` for cookie-authorized guest tracking, `ws/guest/menu/<signed-menu-token>/` for guest menu pricing, and `ws/business/<business-slug>/inventory/` for permission-authorized stock balances.
+Guest order notifications are change signals. Each connected guest is reauthorized and gets a current PostgreSQL snapshot that includes order, payment and confirmed refund state. The consumer rereads the snapshot after subscribing so the subscription boundary has no stale-state gap. Reordered notifications carry current state, and the browser drops repeated event IDs. Redis transports messages rather than storing business records. Durable outbox publication is not proof that every browser received an event. Clients may disconnect or see duplicate update hints. The normal client behavior is to reconnect and reconcile with current state.
 
 ## Authorization
 
-The consumer requires an authenticated Django user. It resolves the requested business slug and accepts the connection when the user is the canonical business owner or has an active membership that allows `orders.view`. The consumer joins a group named for the resolved business ID, not the raw slug.
+Origin validation and the Django session stack wrap the Channels router. MFA blocks incomplete protected sessions. Business orders use order permissions and business scope. Inventory and purchasing enforce their own permission and location rules. Platform billing is owner-only. Guest tracking uses the signed cookie for that order and guest menu uses a live signed table or pickup token. Protected streams recheck relevant access before sending data. Paired devices currently use bearer-authenticated HTTP APIs, with no device-specific WebSocket route.
 
-On an order update event, the consumer sends JSON containing:
+The browser KDS uses a user-session stream. Guest menus, guest order state, POS, inventory and purchasing, and billing have live paths. Staff and workspace administration, general notifications, and comprehensive dashboard updates remain incomplete. [Permission code](../core/permissions.py) · [Consumers](../core/consumers.py) · [ASGI routing](../config/asgi.py)
 
-- `event_id`
-- `event`
-- `order_id`
-- `status`
-- `payment_status`
-- `payment_method`
+## Operate and verify
 
-## Transactional outbox
+Run the ASGI process and an outbox worker alongside PostgreSQL and Redis. Test group fan-out and then check two independent, authorized browser clients. In a hosted environment, verify upgrade headers and WSS through the actual reverse proxy.
 
-Order service operations create `OutboxEvent` records as durable pending events. The management command:
-
-```bash
-python manage.py process_outbox
+```powershell
+.\.venv\Scripts\python.exe manage.py check_realtime
+.\.venv\Scripts\python.exe manage.py process_outbox
 ```
 
-polls due unpublished events in batches of up to 100. It supports:
-
-```bash
-python manage.py process_outbox --once
-python manage.py process_outbox --interval 2
-```
-
-`--once` processes one batch and exits. The default worker polls continuously with a two-second interval.
-
-The worker also evaluates active promotion schedules on each pass. A schedule state transition creates a durable `menu.update` outbox event so connected guest menus fetch the current server-priced menu. Saving a promotion also queues this event directly. Scheduled live delivery therefore depends on this worker remaining supervised.
-
-The outbox prevents the application from relying solely on an in-memory post-save callback: the event record is persisted and can be retried after transient delivery failures.
-
-## Deployment requirements
-
-- Run the ASGI app (for example, Uvicorn), not only a WSGI server, for WebSocket support.
-- Configure `REDIS_URL` to a protected Redis service.
-- Run at least one `process_outbox` worker.
-- Monitor worker health, retry counts, event age, and `last_error`.
-- Use TLS (`wss://`) for browser connections in production.
-
-## Verification
-
-PostgreSQL/Redis integration tests cover private guest snapshot authorization, order state delivery, promotion updates and scheduled promotion boundary delivery. A real browser verified guest order state changes and repricing of an already-open QR menu after a promotion save. Provider callbacks and other operational domains still require dedicated integration verification.
-
-## Scope
-
-Order and payment tracking, guest menu pricing and inventory balance updates are live. Catalog administration, employee/workspace changes, dashboards, station performance and notifications do not yet have complete realtime synchronization.
-
-## Modifier changes
-
-A successful editor save enqueues a menu event in the same transaction as the group and option changes. The outbox invalidates both the signed guest menu and the authenticated business order stream. The latter sends a `catalog.changed` notification, and authorized POS screens request a new catalog snapshot for the selected location. Draft quantities and eligible choices survive the refresh. A draft containing an unavailable choice requires review before submission. Guest checkout revalidates signed quotes against the database.
+The probe exercises Redis/Channels, and ``/readyz/`` checks dependency connectivity. Measure the oldest unpublished event and retries to observe worker progress. [Testing](TESTING.md) · [Operations](OPERATIONS.md)

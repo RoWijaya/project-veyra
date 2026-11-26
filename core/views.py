@@ -2,13 +2,12 @@ import hashlib
 import io
 import re
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-import django
 import qrcode
 from django.conf import settings
 from django.contrib import messages
@@ -17,10 +16,10 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
 from django.core import signing
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, DecimalField, F, Prefetch, Q, Sum
+from django.db.models import Avg, Count, DecimalField, Exists, F, Max, OuterRef, Prefetch, Q, Sum
 from django.db.models.functions import TruncDate
 from django.http import (
     Http404,
@@ -40,6 +39,7 @@ from django.utils.http import (
     urlsafe_base64_decode,
     urlsafe_base64_encode,
 )
+from django.contrib.auth.forms import SetPasswordForm
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST, require_safe
 
@@ -84,11 +84,14 @@ from .models import (
     User,
 )
 from .modifiers import modifier_catalog, submitted_options
+from .page_errors import access_restricted
+from .account_mail import VERIFICATION_TTL, deliver_in_memory, queue_verification, send_account_email
 from .permissions import (
     ORDER_TRACKING_MAX_AGE,
     order_for_tracking_cookie,
     order_tracking_cookie_name,
     order_tracking_cookie_signer,
+    valid_location_key,
 )
 from .pricing import calculate_voucher, pos_voucher_approval, price_order_items, promotional_ordering
 from .voucher_limits import VoucherRateLimit, check_voucher_attempt
@@ -104,6 +107,7 @@ from .services import (
     create_order,
     create_printer,
     create_station,
+    deactivate_membership,
     delete_payment_connection,
     enforce_business_limit,
     initiate_qris_payment,
@@ -194,31 +198,10 @@ def healthz(request):
     return HttpResponse("ok", content_type="text/plain")
 
 
-def send_account_email(subject, body, recipient):
-    if django.VERSION >= (6, 1):
-        from django.core.mail import EmailMessage
-
-        message = EmailMessage(subject, body, settings.DEFAULT_FROM_EMAIL, [recipient])
-        return message.send(using="default")
-    from django.core.mail import send_mail
-
-    return send_mail(subject, body, None, [recipient])
-
-
-def send_verification_email(request, user, next_url=""):
-    token = signing.dumps(user.pk, salt="veyra-email-verification")
-    uid = urlsafe_base64_encode(str(user.pk).encode())
-    verify_path = reverse("verify_email", kwargs={"uidb64": uid, "token": token})
-    if next_url:
-        verify_path = f"{verify_path}?{urlencode({'next': next_url})}"
-    link = request.build_absolute_uri(verify_path)
-    send_account_email("Verify your Veyra account", f"Confirm your email: {link}", user.email)
-
-
 @require_http_methods(["GET", "POST"])
 def resend_verification(request):
     next_url = request.POST.get("next") or request.GET.get("next", "")
-    if not url_has_allowed_host_and_scheme(
+    if len(next_url) > 2048 or not url_has_allowed_host_and_scheme(
         next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
     ):
         next_url = ""
@@ -233,8 +216,10 @@ def resend_verification(request):
         if attempts <= 8 and cache.add(email_key, True, 600):
             user = User.objects.filter(email=email, is_active=False, email_verified_at__isnull=True).first()
             if user:
-                send_verification_email(request, user, next_url)
-                AuditEvent.objects.create(actor=user, action="account.verification_resent")
+                delivery = queue_verification(
+                    user_id=user.pk, origin=request.build_absolute_uri("/").rstrip("/"), next_url=next_url, resend=True,
+                )
+                deliver_in_memory(delivery)
         return render(request, "core/registered.html", {"next_url": next_url})
     return render(request, "core/auth.html", {
         "form": form, "title": "Resend verification email", "next_url": next_url,
@@ -242,22 +227,33 @@ def resend_verification(request):
 
 
 def register(request):
+    if request.method == "POST" and "email" in request.POST and not {"first_name", "password1", "password2"}.intersection(request.POST):
+        return resend_verification(request)
     next_url = request.POST.get("next") or request.GET.get("next", "")
-    if not url_has_allowed_host_and_scheme(
+    if len(next_url) > 2048 or not url_has_allowed_host_and_scheme(
         next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
     ):
         next_url = ""
     form = RegistrationForm(request.POST or None)
-    if request.method == "POST":
-        submitted_email = request.POST.get("email", "").strip().lower()
-        if submitted_email and User.objects.filter(email=submitted_email).exists():
-            return render(request, "core/registered.html", {"next_url": next_url})
     if request.method == "POST" and form.is_valid():
         user = form.save(commit=False)
         user.is_active = False
-        user.save()
-        send_verification_email(request, user, next_url)
-        AuditEvent.objects.create(actor=user, action="account.registered")
+        delivery = None
+        try:
+            with transaction.atomic():
+                user.save()
+                delivery = queue_verification(
+                    user_id=user.pk, origin=request.build_absolute_uri("/").rstrip("/"), next_url=next_url,
+                )
+                AuditEvent.objects.create(actor=user, action="account.registered")
+        except IntegrityError:
+            if not User.objects.filter(email=user.email).exists():
+                raise
+            request.session.setdefault("pending_verification_user", None)
+        else:
+            request.session["pending_verification_user"] = user.pk
+        request.session.cycle_key()
+        deliver_in_memory(delivery)
         return render(request, "core/registered.html", {"next_url": next_url})
     return render(
         request,
@@ -266,21 +262,32 @@ def register(request):
     )
 
 
+@never_cache
+@require_http_methods(["GET", "POST"])
 @transaction.atomic
 def verify_email(request, uidb64, token):
     try:
         uid = force_str(urlsafe_base64_decode(uidb64))
-        user_id = signing.loads(token, salt="veyra-email-verification", max_age=60 * 60 * 24)
+        user_id = signing.loads(token, salt="veyra-email-verification", max_age=VERIFICATION_TTL)
         if str(user_id) != uid:
             raise signing.BadSignature
         user = get_object_or_404(User.objects.select_for_update(), pk=uid, email_verified_at__isnull=True, is_active=False)
     except (ValueError, TypeError, signing.BadSignature, Http404):
         return render(request, "core/verify.html", {"valid": False}, status=400)
-    if not user.is_active:
-        user.is_active = True
-        user.email_verified_at = timezone.now()
-        user.save(update_fields=["is_active", "email_verified_at"])
-        AuditEvent.objects.create(actor=user, action="account.email_verified")
+    started_here = request.session.get("pending_verification_user") == user.pk
+    update_fields = ["is_active", "email_verified_at"]
+    if not started_here:
+        form = SetPasswordForm(user, data=request.POST if request.method == "POST" else None)
+        if not form.is_valid():
+            return render(request, "core/verify.html", {"form": form})
+        form.save(commit=False)
+        update_fields.append("password")
+    else:
+        request.session.pop("pending_verification_user", None)
+    user.is_active = True
+    user.email_verified_at = timezone.now()
+    user.save(update_fields=update_fields)
+    AuditEvent.objects.create(actor=user, action="account.email_verified")
     next_url = request.GET.get("next", "")
     if url_has_allowed_host_and_scheme(
         next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
@@ -292,7 +299,7 @@ def verify_email(request, uidb64, token):
 def sign_in(request):
     error = None
     next_url = request.POST.get("next") or request.GET.get("next", "")
-    if not url_has_allowed_host_and_scheme(
+    if len(next_url) > 2048 or not url_has_allowed_host_and_scheme(
         next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
     ):
         next_url = ""
@@ -386,6 +393,7 @@ def business_dashboard(request, slug):
     can_see_catalog = membership.allows("catalog.view")
     can_manage_catalog = membership.allows("catalog.manage")
     can_see_orders = membership.allows("orders.view")
+    orders = membership.scope_locations(business.orders)
     can_see_locations = membership.allows("locations.view")
     can_see_inventory = membership.allows("inventory.view")
     can_see_customers = membership.allows("customers.view")
@@ -413,9 +421,9 @@ def business_dashboard(request, slug):
             "product_count": business.products.filter(active=True).count()
             if can_see_catalog
             else None,
-            "order_count": business.orders.count() if can_see_orders else None,
-            "locations": business.locations.count() if can_see_locations else None,
-            "recent_orders": business.orders.order_by("-created_at")[:5] if can_see_orders else [],
+            "order_count": orders.count() if can_see_orders else None,
+            "locations": membership.allowed_locations().count() if can_see_locations else None,
+            "recent_orders": orders.order_by("-created_at")[:5] if can_see_orders else [],
         },
     )
 
@@ -425,13 +433,14 @@ def business_dashboard(request, slug):
 def reports(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("reports.view"):
-        return HttpResponseForbidden("You do not have access to reports.")
+        raise PermissionDenied
     business = membership.business
     try:
         require_business_feature(business, "analytics")
     except PermissionError:
-        return HttpResponse("Analytics is unavailable on this subscription.", status=403)
-    today = timezone.localdate()
+        return access_restricted(request, "Sales reports are unavailable on this subscription. Ask the business owner to review the plan.")
+    report_zone = ZoneInfo(business.timezone_name)
+    today = timezone.localdate(timezone=report_zone)
     raw_end_date = request.GET.get("end", "")
     raw_start_date = request.GET.get("start", "")
     def invalid_dates(message):
@@ -440,8 +449,7 @@ def reports(request, slug):
             "filter_error": message,
             "start_value": raw_start_date,
             "end_value": raw_end_date,
-            "locations": business.locations.filter(active=True).order_by("name"),
-            "categories": business.categories.order_by("name"),
+            "locations": membership.allowed_locations().filter(active=True).order_by("name"),
             "location_value": request.GET.get("location", ""),
             "category_value": request.GET.get("category", ""),
         }, status=400)
@@ -458,36 +466,64 @@ def reports(request, slug):
     if start_date > end_date or (end_date - start_date).days > 366:
         return invalid_dates("Choose a date range of at most 367 days, with From on or before Through.")
     location_id = request.GET.get("location", "")
-    locations = business.locations.filter(active=True).order_by("name")
+    locations = membership.allowed_locations().filter(active=True).order_by("name")
     location = None
     if location_id:
+        if not valid_location_key(location_id):
+            raise Http404
         location = get_object_or_404(locations, pk=location_id)
-    categories = business.categories.order_by("name")
     category_id = request.GET.get("category", "")
-    category = get_object_or_404(categories, pk=category_id) if category_id else None
-    start_at = timezone.make_aware(datetime.combine(start_date, time.min))
-    end_at = timezone.make_aware(datetime.combine(next_date, time.min))
-    orders = business.orders.filter(created_at__gte=start_at, created_at__lt=end_at)
-    lines = OrderLine.objects.filter(order__in=orders)
+    if category_id and category_id not in {"unknown", "uncategorized"} and not valid_location_key(category_id):
+        raise Http404
+    try:
+        start_at = datetime.combine(start_date, time.min, tzinfo=report_zone).astimezone(UTC)
+        end_at = datetime.combine(next_date, time.min, tzinfo=report_zone).astimezone(UTC)
+    except OverflowError:
+        return invalid_dates("Choose calendar dates within the supported range.")
+    scoped_orders = membership.scope_locations(business.orders)
+    historical_categories = (
+        OrderLine.objects.filter(order__in=scoped_orders, category_snapshot_id__isnull=False)
+        .values("category_snapshot_id", "category_snapshot_name")
+        .annotate(last_seen=Max("order__created_at"))
+        .order_by("-last_seen", "category_snapshot_id", "category_snapshot_name")
+    )
+    category_labels = {}
+    for snapshot in historical_categories:
+        category_labels.setdefault(str(snapshot["category_snapshot_id"]), snapshot["category_snapshot_name"])
+    categories = sorted(category_labels.items(), key=lambda category: category[1].casefold())
+    orders = scoped_orders.filter(created_at__gte=start_at, created_at__lt=end_at)
     if location:
         orders = orders.filter(location=location)
-        lines = lines.filter(order__location=location)
-    if category:
-        lines = lines.filter(product__category=category)
+    lines = OrderLine.objects.filter(order__in=orders)
+    if category_id == "unknown":
+        lines = lines.filter(category_snapshot_name__isnull=True)
+    elif category_id == "uncategorized":
+        lines = lines.filter(category_snapshot_name="")
+    elif category_id:
+        lines = lines.filter(category_snapshot_id=category_id)
     live_orders = orders.exclude(status=Order.Status.CANCELLED)
     paid = live_orders.filter(payment_status=Order.PaymentStatus.PAID)
     pending = live_orders.filter(
         payment_status__in=(Order.PaymentStatus.UNPAID, Order.PaymentStatus.PENDING)
     )
+    from .models import OrderRefund
+    from .refunds import refund_total
+
     paid_total = paid.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
+    settled_orders = orders.filter(payment_status=Order.PaymentStatus.PAID)
+    settled_total = settled_orders.aggregate(total=Sum("total", default=Decimal("0.00")))["total"]
+    refunded_total = refund_total(OrderRefund.objects.filter(order__in=settled_orders, status=OrderRefund.Status.SUCCEEDED))
     pending_total = pending.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
     cancelled = orders.filter(status=Order.Status.CANCELLED)
     payment_breakdown = list(
         paid.values("payment_method").annotate(total=Sum("total"), orders=Count("pk"))
         .order_by("payment_method")
     )
+    payment_labels = dict(Order.PaymentMethod.choices)
+    for row in payment_breakdown:
+        row["method_label"] = payment_labels.get(row["payment_method"], "Other")
     sales_by_day = list(
-        paid.annotate(day=TruncDate("created_at", tzinfo=ZoneInfo(business.timezone_name)))
+        paid.annotate(day=TruncDate("created_at", tzinfo=report_zone))
         .values("day")
         .annotate(revenue=Sum("total"), orders=Count("pk"))
         .order_by("day")
@@ -495,13 +531,16 @@ def reports(request, slug):
     category_performance = list(
         lines.filter(order__payment_status=Order.PaymentStatus.PAID)
         .exclude(order__status=Order.Status.CANCELLED)
-        .values("product__category__name")
+        .values("category_snapshot_id", "category_snapshot_name")
         .annotate(
             units=Sum("quantity"),
             revenue=Sum(F("unit_price") * F("quantity"), output_field=DecimalField()),
         )
-        .order_by("-revenue")
+        .order_by("-revenue", "category_snapshot_name", "category_snapshot_id")
     )
+    for row in category_performance:
+        name = row["category_snapshot_name"]
+        row["category_label"] = "Unknown historical category" if name is None else name or "Uncategorized"
     location_performance = list(
         paid.values("location__name")
         .annotate(revenue=Sum("total"), orders=Count("pk"))
@@ -535,10 +574,12 @@ def reports(request, slug):
         "locations": locations,
         "categories": categories,
         "selected_location": location,
-        "selected_category": category,
+        "category_value": category_id,
         "start_date": start_date,
         "end_date": end_date,
         "paid_total": paid_total,
+        "refunded_total": refunded_total,
+        "retained_total": settled_total - refunded_total,
         "pending_total": pending_total,
         "paid_orders": paid.count(),
         "average_paid_order": paid.aggregate(value=Avg("total"))["value"] or Decimal("0.00"),
@@ -561,8 +602,8 @@ def reports(request, slug):
 @login_required
 def promotions(request, slug, promotion_id=None):
     membership = membership_for(request, slug)
-    if not membership.allows("catalog.view"):
-        return HttpResponseForbidden("You do not have access to this catalog.")
+    if not membership.allows("catalog.view") or membership.location_restricted:
+        raise PermissionDenied
     business = membership.business
     promotion = (
         get_object_or_404(Promotion, business=business, pk=promotion_id)
@@ -572,11 +613,11 @@ def promotions(request, slug, promotion_id=None):
     form = PromotionForm(request.POST or None, business=business, instance=promotion)
     if request.method == "POST":
         if not membership.allows("catalog.manage"):
-            return HttpResponseForbidden("You cannot manage promotions for this business.")
+            raise PermissionDenied
         try:
             require_business_feature(business, "promotions")
         except PermissionError as exc:
-            return HttpResponse(str(exc), status=403)
+            return access_restricted(request, str(exc))
         if form.is_valid():
             promotion = form.save()
             AuditEvent.objects.create(
@@ -612,21 +653,27 @@ def promotions(request, slug, promotion_id=None):
 def locations(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("locations.view"):
-        return HttpResponseForbidden("You do not have access to locations.")
+        raise PermissionDenied
     can_manage = membership.allows("locations.manage")
     form = LocationForm(request.POST or None)
     form.instance.business = membership.business
     if request.method == "POST":
         if not can_manage:
-            return HttpResponseForbidden("You cannot manage locations.")
+            raise PermissionDenied
         action = request.POST.get("action")
         if action in {"enable_pickup", "disable_pickup"}:
             location_id = request.POST.get("location", "")
-            if not location_id.isascii() or not location_id.isdecimal() or len(location_id) > 19:
+            if not valid_location_key(location_id):
                 raise Http404
             with transaction.atomic():
+                membership = get_object_or_404(
+                    Membership.objects.select_for_update(of=("self",)),
+                    pk=membership.pk, active=True, user__is_active=True,
+                )
+                if not membership.allows("locations.manage"):
+                    raise PermissionDenied
                 location = get_object_or_404(
-                    membership.business.locations.select_for_update(), pk=location_id, active=True,
+                    membership.allowed_locations().select_for_update(of=("self",)), pk=location_id, active=True,
                 )
                 enabled = action == "enable_pickup"
                 if enabled != bool(location.takeaway_version):
@@ -655,7 +702,7 @@ def locations(request, slug):
             else:
                 messages.success(request, "Location added.")
                 return redirect("locations", slug=slug)
-    locations = membership.business.locations.order_by("name")
+    locations = membership.allowed_locations().order_by("name")
     for location in locations:
         if location.active and location.takeaway_version:
             location.pickup_path = reverse("pickup_menu", kwargs={"token": pickup_token(location)})
@@ -668,31 +715,41 @@ def locations(request, slug):
             "locations": locations,
             "form": form,
             "can_manage": can_manage,
+            "can_add_location": can_manage and not membership.location_restricted,
         },
     )
 
 
 @login_required
+@transaction.atomic
 def tables(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("tables.view") and not membership.allows("tables.manage"):
-        return HttpResponseForbidden("You do not have access to tables.")
+        raise PermissionDenied
     business = membership.business
+    if request.method == "POST":
+        membership = get_object_or_404(
+            Membership.objects.select_for_update(of=("self",)),
+            pk=membership.pk, active=True, user__is_active=True,
+        )
     can_manage = membership.allows("tables.manage")
+    scoped_tables = membership.scope_locations(business.tables)
     if request.method == "POST":
         if not can_manage:
-            return HttpResponseForbidden("You cannot manage tables.")
+            raise PermissionDenied
         table_id = request.POST.get("table", "")
         action = request.POST.get("action")
         if action in {"revoke", "rotate", "update"}:
-            table = get_object_or_404(DiningTable, pk=table_id, business=business)
+            try:
+                table_id = uuid.UUID(table_id)
+            except ValueError:
+                raise Http404 from None
+            table = get_object_or_404(scoped_tables.select_for_update(), pk=table_id)
             if action == "update":
-                location = get_object_or_404(
-                    Location,
-                    pk=request.POST.get("location"),
-                    business=business,
-                    active=True,
-                )
+                location_id = request.POST.get("location", "")
+                if not valid_location_key(location_id):
+                    raise Http404
+                location = get_object_or_404(membership.allowed_locations(), pk=location_id, active=True)
                 name = request.POST.get("name", "").strip()
                 area = request.POST.get("area", "").strip()
                 if not name or len(name) > 80 or len(area) > 80:
@@ -700,7 +757,8 @@ def tables(request, slug):
                 else:
                     table.name, table.area, table.location = name, area, location
                     try:
-                        table.save(update_fields=["name", "area", "location"])
+                        with transaction.atomic():
+                            table.save(update_fields=["name", "area", "location"])
                         AuditEvent.objects.create(
                             business=business,
                             actor=request.user,
@@ -730,18 +788,20 @@ def tables(request, slug):
                 )
                 messages.success(request, "Table QR updated.")
             return redirect("tables", slug=slug)
-        location = get_object_or_404(
-            Location, pk=request.POST.get("location"), business=business, active=True
-        )
+        location_id = request.POST.get("location", "")
+        if not valid_location_key(location_id):
+            raise Http404
+        location = get_object_or_404(membership.allowed_locations(), pk=location_id, active=True)
         name = request.POST.get("name", "").strip()
         area = request.POST.get("area", "").strip()
         if not name or len(name) > 80 or len(area) > 80:
             messages.error(request, "Enter a table name and an area under 81 characters.")
         else:
             try:
-                table = DiningTable.objects.create(
-                    business=business, location=location, name=name, area=area
-                )
+                with transaction.atomic():
+                    table = DiningTable.objects.create(
+                        business=business, location=location, name=name, area=area
+                    )
                 AuditEvent.objects.create(
                     business=business,
                     actor=request.user,
@@ -752,7 +812,7 @@ def tables(request, slug):
                 return redirect("tables", slug=slug)
             except IntegrityError:
                 messages.error(request, "A table with that name already exists at this location.")
-    table_list = business.tables.select_related("location").order_by("location__name", "name")
+    table_list = scoped_tables.select_related("location").order_by("location__name", "name")
     table_tokens = {
         table.pk: signing.dumps(
             [str(table.pk), str(table.qr_version)], salt="veyra-table-qr", compress=True
@@ -769,7 +829,7 @@ def tables(request, slug):
             "business": business,
             "tables": table_list,
             "table_tokens": table_tokens,
-            "locations": business.locations.filter(active=True).order_by("name"),
+            "locations": membership.allowed_locations().filter(active=True).order_by("name"),
             "can_manage": can_manage,
         },
     )
@@ -789,12 +849,13 @@ def table_qr(request, token):
     return response
 
 
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "HEAD", "POST"])
 def table_order(request, token):
-    if request.method == "GET":
-        from .customer_views import menu
+    from .customer_views import render_guest_menu
+    from .ordering_page import published_design, settings_for, visible_products
 
-        return menu(request, token)
+    if request.method in {"GET", "HEAD"}:
+        return render_guest_menu(request, token)
     table = validate_table_token(token)
     subscription_allows_orders = business_entitlements(table.business)["active"] and (
         "*" in business_entitlements(table.business)["features"]
@@ -804,6 +865,7 @@ def table_order(request, token):
     products = promotional_ordering(
         business=table.business, products=products, location=table.location
     )
+    products = visible_products(products, settings_for(published_design(table.business)))
     providers = table.business.payment_connections.filter(verified_at__isnull=False).order_by("provider")
     error = None
     if not subscription_allows_orders:
@@ -871,25 +933,20 @@ def table_order(request, token):
             return response
         except (ValueError, Product.DoesNotExist, DiningTable.DoesNotExist):
             error = "We could not place that order. Check quantities and try again."
-    return render(
-        request,
-        "core/table_order.html",
-        {
-            "table": table,
-            "table_token": token,
-            "products": products,
-            "providers": providers,
-            "idempotency_key": uuid.uuid4(),
-            "tracking_token": uuid.uuid4().hex + uuid.uuid4().hex,
-            "error": error,
-        },
-    )
+    return render_guest_menu(request, token, error=error)
 
 
 @require_safe
 def table_menu_data(request, token):
     from .media_services import menu_banners
-    table = validate_table_token(token)
+    from .ordering_page import published_design, settings_for, visible_banners, visible_products
+    from .storefront import resolve_storefront
+
+    storefront = resolve_storefront(token)
+    table = storefront.table
+    if table is None:
+        raise Http404
+    data = settings_for(published_design(storefront.business))
     products = promotional_ordering(
         business=table.business,
         products=table.business.products.select_related("category", "image")
@@ -907,8 +964,8 @@ def table_menu_data(request, token):
             "price": str(product.display_price),
             "promotions": [promotion.name for promotion in product.price_quote.promotions],
         }
-        for product in products
-    ], "banners": menu_banners(table.business, table.location, token)})
+        for product in visible_products(products, data)
+    ], "banners": visible_banners(menu_banners(table.business, table.location, token), data)})
 
 
 @require_http_methods(["GET", "POST"])
@@ -930,10 +987,17 @@ def guest_order_tracking(request, order_id):
                 ),
             )
         except (ValueError, PaymentConnection.DoesNotExist, signing.BadSignature, OSError):
-            messages.error(request, "We could not start payment. Please try again or pay at the counter.")
+            messages.error(request, "We could not confirm QRIS. Check the existing payment before paying again.")
         return redirect("guest_order_tracking", order_id=order.pk)
-    payment = order.payments.order_by("-created_at").first()
-    return render(request, "core/guest_order_tracking.html", {"order": order, "payment": payment})
+    payment_needs_review = order.payments.filter(status=PaymentTransaction.Status.REVIEW).exists()
+    payment = order.payments.order_by("-created_at").first() if not payment_needs_review else None
+    from .refunds import refund_total
+    from .models import OrderRefund
+
+    refunded = refund_total(order.refunds.filter(status=OrderRefund.Status.SUCCEEDED))
+    return render(request, "core/guest_order_tracking.html", {
+        "order": order, "payment": payment, "refunded": refunded, "payment_needs_review": payment_needs_review,
+    })
 
 
 @require_safe
@@ -941,12 +1005,12 @@ def guest_order_payment_qr(request, order_id):
     order = order_for_tracking_cookie(
         order_id, request.COOKIES.get(order_tracking_cookie_name(order_id))
     )
-    if order is None:
+    if order is None or order.status == Order.Status.CANCELLED or order.payment_status != Order.PaymentStatus.PENDING:
         raise Http404
     tx = order.payments.filter(
         status=PaymentTransaction.Status.PENDING, expires_at__gt=timezone.now()
     ).order_by("-created_at").first()
-    if not tx or not tx.qr_payload:
+    if not tx or not tx.qr_payload or order.payments.filter(status=PaymentTransaction.Status.REVIEW).exists():
         raise Http404
     from qrcode.image.svg import SvgPathImage
 
@@ -962,12 +1026,12 @@ def guest_order_payment_qr(request, order_id):
 def customers(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("customers.view"):
-        return HttpResponseForbidden("You do not have access to customers.")
+        raise PermissionDenied
     can_manage = membership.allows("customers.manage")
     form = CustomerForm(request.POST or None)
     if request.method == "POST":
         if not can_manage:
-            return HttpResponseForbidden("You cannot manage customers.")
+            raise PermissionDenied
         if form.is_valid():
             customer = form.save(commit=False)
             customer.business = membership.business
@@ -1008,7 +1072,7 @@ def customers(request, slug):
 def inventory(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("inventory.view"):
-        return HttpResponseForbidden("You do not have access to inventory.")
+        raise PermissionDenied
     business = membership.business
     can_manage = membership.allows("inventory.manage")
     allowed_locations = membership.allowed_inventory_locations()
@@ -1018,6 +1082,7 @@ def inventory(request, slug):
     adjustment_form = StockAdjustmentForm(
         request.POST if request.POST.get("action") == "adjust" else None,
         business=business,
+        auto_id="id_adjustment_%s",
     )
     for form in (add_form, adjustment_form):
         form.fields['location'].queryset = allowed_locations.filter(active=True).order_by('name')
@@ -1025,7 +1090,7 @@ def inventory(request, slug):
     idempotency_key = request.POST.get("idempotency_key") or str(uuid.uuid4())
     if request.method == "POST":
         if not can_manage:
-            return HttpResponseForbidden("You cannot manage inventory.")
+            raise PermissionDenied
         try:
             if request.POST.get("action") == "add" and add_form.is_valid():
                 data = add_form.cleaned_data
@@ -1055,7 +1120,7 @@ def inventory(request, slug):
                 messages.success(request, "Stock updated.")
                 return redirect("inventory", slug=slug)
         except PermissionError:
-            return HttpResponseForbidden("You cannot manage inventory.")
+            raise PermissionDenied
         except (
             ValueError,
             InventoryBalance.DoesNotExist,
@@ -1091,7 +1156,7 @@ def inventory(request, slug):
 def recipes(request, slug):
     membership = membership_for(request, slug)
     if not membership.allows("inventory.manage"):
-        return HttpResponseForbidden("You do not have access to recipe management.")
+        raise PermissionDenied
     business = membership.business
     form = RecipeLineForm(request.POST or None, business=business)
     if request.method == "POST" and form.is_valid():
@@ -1148,17 +1213,23 @@ def point_of_sale(request, slug):
     membership = membership_for(request, slug)
     business = membership.business
     can_create = membership.allows("orders.create") and membership.allows("catalog.view")
-    locations = business.locations.filter(active=True).order_by("name")
+    locations = membership.allowed_locations().filter(active=True).order_by("name")
     location_id = (request.POST if request.method == "POST" else request.GET).get("location", "")
-    valid_location_id = location_id.isascii() and location_id.isdecimal() and len(location_id) <= 19
-    selected_location = locations.filter(pk=location_id).first() if valid_location_id else None
+    selected_location = None
+    if location_id:
+        if not valid_location_key(location_id):
+            raise Http404
+        selected_location = get_object_or_404(locations, pk=location_id)
+    elif membership.location_restricted:
+        selected_location = locations.first()
+        can_create = can_create and selected_location is not None
     products = business.products.select_related("category", "image").defer("image__content").filter(active=True)
     products = promotional_ordering(
         business=business, products=products, location=selected_location
     )
     groups = modifier_catalog(
         business=business, product_ids=[product.pk for product in products],
-        location=selected_location, include_other_locations=True,
+        location=selected_location, include_other_locations=not membership.location_restricted,
     )
     for product in products:
         product.order_modifier_groups = groups[product.pk]
@@ -1172,11 +1243,9 @@ def point_of_sale(request, slug):
     preview_json = action == "apply_voucher" and request.headers.get("Accept") == "application/json"
     if request.method == "POST":
         if not can_create:
-            return HttpResponseForbidden("You cannot create orders for this business.")
+            raise PermissionDenied
         items = []
         try:
-            if location_id and selected_location is None:
-                raise ValueError("Choose one of this business’s locations.")
             for product in products:
                 for configuration in product.order_configurations:
                     quantity = int(configuration["quantity"])
@@ -1242,7 +1311,14 @@ def point_of_sale(request, slug):
     if preview_json:
         return JsonResponse({"error": error}, status=response_status)
     orders = (
-        list(business.orders.order_by("-created_at")[:10])
+        list(membership.scope_locations(business.orders).annotate(
+            qris_blocks_tender=Exists(PaymentTransaction.objects.filter(
+                order=OuterRef("pk"), status__in=PaymentTransaction.TENDER_BLOCKING_STATUSES,
+            )),
+            qris_needs_review=Exists(PaymentTransaction.objects.filter(
+                order=OuterRef("pk"), status=PaymentTransaction.Status.REVIEW,
+            )),
+        ).order_by("-created_at")[:10])
         if membership.allows("orders.view")
         else []
     )
@@ -1285,6 +1361,7 @@ def record_payment(request, slug, order_id):
     membership = membership_for(request, slug)
     if not membership.allows("orders.manage") or not membership.allows("orders.view"):
         return HttpResponseForbidden("You cannot record payments for these orders.")
+    destination = "order_history" if request.POST.get("source") == "history" else "point_of_sale"
     try:
         tender = record_order_payment(
             business=membership.business,
@@ -1297,11 +1374,11 @@ def record_payment(request, slug, order_id):
         )
     except Order.DoesNotExist as error:
         raise Http404 from error
-    except PermissionError:
+    except (PermissionError, Membership.DoesNotExist):
         return HttpResponseForbidden("You cannot record payments for these orders.")
     except (ValueError, OrderTender.DoesNotExist) as error:
         messages.error(request, str(error))
-        return redirect("point_of_sale", slug=slug)
+        return redirect(destination, slug=slug)
     if tender.method == OrderTender.Method.CASH:
         messages.success(
             request,
@@ -1309,7 +1386,7 @@ def record_payment(request, slug, order_id):
         )
     else:
         messages.success(request, "Card payment recorded after terminal confirmation.")
-    return redirect("point_of_sale", slug=slug)
+    return redirect(destination, slug=slug)
 
 
 @login_required
@@ -1317,13 +1394,22 @@ def team(request, slug):
     membership = membership_for(request, slug)
     can_view = membership.allows("employees.view") or membership.allows("employees.manage")
     if not can_view:
-        return HttpResponseForbidden("You do not have access to this team.")
-    can_manage = membership.allows("employees.manage")
+        raise PermissionDenied
+    can_manage = membership.allows("employees.manage") and not membership.location_restricted
     form = InvitationForm(request.POST or None)
     if request.method == "POST":
-        if not can_manage:
-            return HttpResponseForbidden("You cannot manage employees.")
         action = request.POST.get("action")
+        if action == "deactivate_membership":
+            try:
+                deactivate_membership(business=membership.business, actor=request.user, member_id=request.POST.get("member_id"))
+            except (ValueError, Membership.DoesNotExist):
+                raise Http404 from None
+            except PermissionError:
+                raise PermissionDenied from None
+            messages.success(request, "Team member access disabled.")
+            return redirect("team", slug=slug)
+        if not can_manage:
+            raise PermissionDenied
         if action == "revoke_invitation":
             try:
                 revoke_invitation(
@@ -1335,7 +1421,7 @@ def team(request, slug):
             except (Invitation.DoesNotExist, ValueError) as error:
                 messages.error(request, str(error))
             except PermissionError:
-                return HttpResponseForbidden("You cannot manage employees.")
+                raise PermissionDenied
             return redirect("team", slug=slug)
         if form.is_valid():
             try:
@@ -1369,7 +1455,7 @@ def team(request, slug):
                 messages.success(request, f"Invitation sent to {invitation.email}.")
                 return redirect("team", slug=slug)
             except PermissionError:
-                return HttpResponseForbidden("You cannot grant those team permissions.")
+                raise PermissionDenied
             except ValueError as error:
                 messages.error(request, str(error))
     memberships = (
@@ -1406,6 +1492,7 @@ def stations(request, slug):
         if request.method == "POST" and request.POST.get("action") == "create_printer"
         else None,
         business=business,
+        auto_id="id_printer_%s",
     )
     if request.method == "POST":
         action = request.POST.get("action")
@@ -1487,14 +1574,19 @@ def stations(request, slug):
 def station_screen(request, slug, station_id):
     membership = membership_for(request, slug)
     if not membership.allows("orders.view"):
-        return HttpResponseForbidden("You do not have access to operational orders.")
-    station = get_object_or_404(Station, pk=station_id, business=membership.business, active=True)
+        raise PermissionDenied
+    station = get_object_or_404(
+        membership.scope_locations(membership.business.stations), pk=station_id, active=True,
+    )
 
     if request.method == "POST":
         if not membership.allows("orders.manage"):
-            return HttpResponseForbidden("You cannot change operational orders.")
+            raise PermissionDenied
         action = request.POST.get("action")
-        order_id = request.POST.get("order_id")
+        try:
+            order_id = uuid.UUID(request.POST.get("order_id", ""))
+        except ValueError:
+            raise Http404 from None
         if action == "advance":
             next_status = request.POST.get("status")
             try:
@@ -1503,9 +1595,10 @@ def station_screen(request, slug, station_id):
                     order_id=order_id,
                     status=next_status,
                     actor=request.user,
+                    station_id=station.pk,
                 )
                 messages.success(request, f"Order status updated to {next_status}.")
-            except (ValueError, PermissionError, Order.DoesNotExist):
+            except (ValueError, PermissionError, Order.DoesNotExist, Station.DoesNotExist, Membership.DoesNotExist):
                 messages.error(request, "We could not update the order. Check its current status and access.")
         elif action == "reprint":
             try:
@@ -1516,7 +1609,7 @@ def station_screen(request, slug, station_id):
                     actor=request.user,
                 )
                 messages.success(request, "Preparation ticket reprint queued.")
-            except (ValueError, PermissionError, Order.DoesNotExist, Station.DoesNotExist):
+            except (ValueError, PermissionError, Order.DoesNotExist, Station.DoesNotExist, Membership.DoesNotExist):
                 messages.error(request, "We could not queue that ticket. Check the order and station.")
         return redirect("station_screen", slug=slug, station_id=station.pk)
 
@@ -1566,35 +1659,43 @@ def payment_settings(request, slug):
                 )
                 messages.success(
                     request,
-                    "Credentials encrypted and saved. Provider verification is not configured yet.",
+                    "Credentials encrypted and saved. Check the configuration when you are ready.",
                 )
                 return redirect("payment_settings", slug=slug)
             except (PermissionError, ValueError, RuntimeError) as error:
                 messages.error(request, str(error))
         elif action == "verify":
             try:
-                valid, msg = verify_payment_connection(
+                connection_id = request.POST.get("connection_id", "")
+                if not valid_location_key(connection_id):
+                    raise Http404
+                valid, result = verify_payment_connection(
                     business=business,
-                    connection_id=request.POST.get("connection_id"),
+                    connection_id=connection_id,
                     actor=request.user,
+                    reference=request.POST.get("verification_reference", "").strip(),
                 )
-                if valid:
-                    messages.success(request, f"Connection verified: {msg}")
-                else:
-                    messages.error(request, f"Verification failed: {msg}")
-            except Exception as error:
-                messages.error(request, str(error))
+            except (PaymentConnection.DoesNotExist, ValueError):
+                raise Http404 from None
+            except RuntimeError:
+                messages.error(request, "Credential storage is unavailable. Try again later.")
+            else:
+                (messages.success if valid else messages.info)(request, result)
             return redirect("payment_settings", slug=slug)
         elif action == "disconnect":
             try:
-                delete_payment_connection(
+                connection_id = request.POST.get("connection_id", "")
+                if not valid_location_key(connection_id):
+                    raise Http404
+                retained = delete_payment_connection(
                     business=business,
-                    connection_id=request.POST.get("connection_id"),
+                    connection_id=connection_id,
                     actor=request.user,
                 )
-            except PaymentConnection.DoesNotExist:
-                raise Http404
-            messages.success(request, "Merchant credentials removed.")
+            except (PaymentConnection.DoesNotExist, ValueError):
+                raise Http404 from None
+            messages.success(request, "New payments disabled. Existing payment records can still be reconciled."
+                             if retained else "Merchant credentials removed.")
             return redirect("payment_settings", slug=slug)
     return render(
         request,
@@ -1669,7 +1770,7 @@ def update_order_status(request, slug, order_id):
         )
     except Order.DoesNotExist as error:
         raise Http404 from error
-    except PermissionError:
+    except (PermissionError, Membership.DoesNotExist):
         return HttpResponseForbidden("You cannot manage orders for this business.")
     except ValueError as error:
         messages.error(request, str(error))

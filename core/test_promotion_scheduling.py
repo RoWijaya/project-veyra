@@ -131,8 +131,10 @@ class PromotionSchedulingTests(TestCase):
         saved = form.save()
         saved.refresh_from_db()
         self.assertTrue(saved.permanent_offer)
-        self.assertIsNone(saved.start_date)
-        self.assertIsNone(saved.end_date)
+        self.assertEqual(saved.start_date, date(2026, 1, 1))
+        self.assertEqual(saved.end_date, date(2026, 1, 15))
+        restored = PromotionForm(business=self.business, instance=saved)
+        self.assertEqual(restored.initial["start_date"], date(2026, 1, 1))
 
     def test_toggle_permanent_off_enables_date_restrictions(self):
         promo = Promotion.objects.create(

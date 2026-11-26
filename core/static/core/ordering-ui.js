@@ -151,6 +151,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     }
+    const resetFilters = picker.querySelector("[data-reset-product-filters]");
     const updateFilter = () => {
       const query = search.value.trim().toLocaleLowerCase();
       let visible = 0;
@@ -170,10 +171,11 @@ document.addEventListener("DOMContentLoaded", () => {
         results.textContent = `${visible} of ${products.length} ${products.length === 1 ? "product" : "products"} shown. Selected items stay in your order.`;
       }
       if (noResults) noResults.hidden = visible !== 0 || products.length === 0;
+      if (resetFilters) resetFilters.hidden = !query && !category.value;
     };
     search.addEventListener("input", updateFilter);
     category.addEventListener("change", updateFilter);
-    picker.querySelector("[data-reset-product-filters]")?.addEventListener("click", () => {
+    resetFilters?.addEventListener("click", () => {
       search.value = "";
       category.value = "";
       updateFilter();
@@ -406,9 +408,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     const updateActions = () => {
       const state = status?.dataset.status;
-      if (tender) tender.hidden = payment?.textContent.trim() === "Paid" || state === "cancelled" || state === "completed";
+      if (tender) tender.hidden = ["Paid", "Pending"].includes(payment?.textContent.trim()) || state === "cancelled";
       if (form) {
-        form.hidden = !options[state];
+        form.hidden = !options[state] || (state === "ready" && card.dataset.paymentDue === "true" && payment?.textContent.trim() !== "Paid");
         if (options[state]) {
           const select = form.querySelector("select");
           const chosen = select.value;
@@ -437,19 +439,31 @@ document.addEventListener("DOMContentLoaded", () => {
       Completed: "Your order is complete. Thank you for ordering.",
       Cancelled: "This order was cancelled. Please ask the team if you need help.",
     };
+    const qr = tracking.querySelector("[data-guest-payment-pending]");
+    const qrExpiry = Date.parse(qr?.dataset.qrExpires || "");
     const updateTracking = () => {
       const state = orderStatus?.textContent.trim();
       const payment = paymentStatus?.textContent.trim();
       const description = tracking.querySelector("[data-tracking-help]");
       if (description && descriptions[state]) description.textContent = descriptions[state];
-      const qr = tracking.querySelector("[data-guest-payment-pending]");
-      if (qr) qr.hidden = payment !== "Pending" || state === "Cancelled";
+      const needsReview = tracking.dataset.paymentNeedsReview === "true";
+      const review = tracking.querySelector("[data-guest-payment-review]");
+      if (review) review.hidden = !needsReview;
+      const qrAvailable = qrExpiry > Date.now();
+      if (qr) {
+        qr.hidden = needsReview || payment !== "Pending" || state === "Cancelled";
+        qr.querySelectorAll(".payment-qr, [data-qr-expiry]").forEach((node) => { node.hidden = !qrAvailable; });
+      }
       const retry = tracking.querySelector("[data-guest-payment-retry]");
-      if (retry) retry.hidden = payment === "Pending" || payment === "Paid" || state === "Cancelled" || state === "Completed";
+      if (retry) {
+        retry.hidden = needsReview || (payment === "Pending" && qrAvailable) || payment === "Paid" || state === "Cancelled" || state === "Completed";
+        retry.querySelector("button").textContent = payment === "Pending" ? "Check QRIS status" : "Try QRIS again";
+      }
     };
     [orderStatus, paymentStatus].filter(Boolean).forEach((node) => {
       new MutationObserver(updateTracking).observe(node, { childList: true, subtree: true });
     });
     updateTracking();
+    if (qrExpiry > Date.now()) window.setTimeout(updateTracking, qrExpiry - Date.now() + 20);
   }
 });

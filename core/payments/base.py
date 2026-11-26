@@ -2,6 +2,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+from django.utils import timezone
+
+
+def qris_start_time(value=None):
+    instant = timezone.now() if value is None else value
+    if timezone.is_naive(instant):
+        raise ValueError("QRIS requires a timezone-aware timestamp")
+    return instant.astimezone(ZoneInfo("Asia/Jakarta")).replace(microsecond=0)
 
 
 @dataclass
@@ -17,6 +27,7 @@ class PaymentResult:
     expires_at: Optional[datetime] = None
     raw_response: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    uncertain: bool = False
 
 
 class BasePaymentAdapter:
@@ -28,6 +39,8 @@ class BasePaymentAdapter:
         order,
         amount: Decimal,
         expiry_minutes: int = 10,
+        merchant_reference: str = "",
+        requested_at: datetime | None = None,
     ) -> PaymentResult:
         raise NotImplementedError
 

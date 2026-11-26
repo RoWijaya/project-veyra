@@ -1,76 +1,80 @@
-# Domain model and database
+# Data model and integrity
 
-## Identity migration 0019
+[core/models.py](../core/models.py) defines the application schema. PostgreSQL is authoritative. Redis carries transient events and cache data. The relationships below were checked against Django model metadata. Nullable references and secondary foreign keys are described in the tables.
 
-`GoogleIdentity` is one-to-one with User and stores a unique 255-character provider subject and email snapshot. `Authenticator` is one-to-one with User and stores encrypted secret, confirmed state, last accepted counter, recovery-code digests and UUID session-proof version. PostgreSQL row locks serialize TOTP/recovery consumption. Plaintext secrets/codes are never audit metadata. Audit events record Google linking/sign-in and MFA enable/disable/verification/recovery use. Migration 0019 is additive and applied locally; existing tenant, order and subscription data is preserved.
+## Tenancy, workspace and storefront
 
-## Database engine
+```mermaid
+erDiagram
+    USER ||--o{ MEMBERSHIP : joins
+    USER o|--o{ BUSINESS : owns
+    BUSINESS ||--o{ MEMBERSHIP : admits
+    BUSINESS ||--o{ LOCATION : contains
+    BUSINESS ||--o{ DEPARTMENT : contains
+    BUSINESS ||--o{ WORKSPACE : contains
+    DEPARTMENT o|--o{ WORKSPACE : groups
+    LOCATION o|--o{ WORKSPACE : hosts
+    WORKSPACE ||--o{ WORKSPACE_ASSIGNMENT : has
+    MEMBERSHIP ||--o{ WORKSPACE_ASSIGNMENT : holds
+    BUSINESS ||--o{ STATION : configures
+    LOCATION o|--o{ STATION : scopes
+    STATION ||--o{ PAIRED_DEVICE : pairs
+    BUSINESS ||--o| ORDERING_PAGE : configures
+    ORDERING_PAGE ||--o{ ORDERING_PAGE_SNAPSHOT : versions
+```
 
-Normal runtime configuration requires PostgreSQL through `DATABASE_URL`. SQLite is available only when `DJANGO_SQLITE_TEST=1`, primarily for isolated tests. Migrations are in `core/migrations/`.
+| Entities | Relationships and constraints |
+| --- | --- |
+| User, GoogleIdentity, Authenticator | Email is the primary account identifier. Google binds a unique provider subject. The authenticator stores encrypted setup data, replay state and recovery digests. |
+| Business, Membership, Invitation | Business has a nullable canonical owner to preserve legacy rows after migration. Membership is unique per user and business. Its explicit permission list and inventory-location grant are independent of Django admin groups. Invitations belong to a business and record the inviting user. |
+| Location and DiningTable | A location belongs to a business. A table has a business and location, a unique name within that business and location, and independently revocable ordering-link state. |
+| Department, Workspace, WorkspaceAssignment | All derive their tenant from the business or linked membership and workspace. Assignment pairs are unique. These schema relationships are historical configuration, not active grants. |
+| Station, Printer, StationPairingCode, PairedDevice | A station has a business and optional location and printer. Pairing and device credentials link to the station. Capabilities and active state are enforced by the API. |
+| OrderingPage and OrderingPageSnapshot | Business has at most one ordering page. A page has at most one unnumbered draft and one history snapshot per publication number. Publish locks and updates the live page and history together. |
 
-Most tenant-owned records reference `Business` directly or through a parent record. UUID primary keys are used for several externally addressed entities, including `Business`, `Product`, `Order`, `Station`, and `OutboxEvent`.
+## Commerce and inventory
 
-## Main entities
+```mermaid
+erDiagram
+    BUSINESS ||--o{ PRODUCT : sells
+    CATEGORY o|--o{ PRODUCT : groups
+    PRODUCT }o--o{ MODIFIER_GROUP : offers
+    MODIFIER_GROUP ||--o{ MODIFIER_OPTION : contains
+    BUSINESS ||--o{ ORDER : takes
+    ORDER ||--o{ ORDER_LINE : has
+    PRODUCT ||--o{ ORDER_LINE : references
+    ORDER ||--o| ORDER_TENDER : records
+    ORDER ||--o{ PAYMENT_TRANSACTION : attempts
+    PAYMENT_CONNECTION ||--o{ PAYMENT_TRANSACTION : authorizes
+    ORDER ||--o{ ORDER_REFUND : records
+    VOUCHER ||--o{ VOUCHER_REDEMPTION : applied
+    ORDER ||--o| VOUCHER_REDEMPTION : has
+    SUPPLIER ||--o{ PURCHASE_ORDER : supplies
+    PURCHASE_ORDER ||--o{ PURCHASE_ORDER_LINE : has
+    PURCHASE_ORDER ||--o{ PURCHASE_RECEIPT : receives
+    PURCHASE_RECEIPT ||--o{ PURCHASE_RECEIPT_LINE : contains
+    PURCHASE_ORDER_LINE ||--o{ PURCHASE_RECEIPT_LINE : fulfills
+    INVENTORY_ITEM ||--o{ INVENTORY_BALANCE : holds
+    LOCATION ||--o{ INVENTORY_BALANCE : locates
+    INVENTORY_BALANCE ||--o{ STOCK_COUNT : reconciles
+    PURCHASE_ORDER_LINE ||--o{ SUPPLIER_RETURN : returns
+```
 
-| Model | Purpose / important fields |
-|---|---|
-| `User` | Custom Django user; unique email is the login identifier; includes `email_verified_at` |
-| `Business` | Tenant root; `owner`, `name`, unique `slug`, `business_type`, `created_at` |
-| `Membership` | User-to-business collaborator membership; `permissions` JSON list and `active` flag |
-| `Invitation` | Email invitation with permission list, SHA-256 token digest, expiry, and acceptance timestamp |
-| `Location` | Physical business location; name, address, active flag |
-| `Department` | Business-level operational classification |
-| `Workspace` | Optional business workspace, optionally linked to a location and department |
-| `WorkspaceAssignment` | Links a membership to a workspace and stores a permission list; not currently an authorization source |
-| `Printer` | Operational ESC/POS or virtual network printer with connection parameters, paper width, and online status |
-| `Station` | Paired operational endpoint; business, optional location, kind, handling mode (`kds`, `printed_tickets`, `both`), optional assigned printer, capability list, active flag |
-| `StationPairingCode` | Hashed, expiring, single-use station pairing code |
-| `PairedDevice` | Paired station device; hashed bearer-token digest, label, last-seen and revocation timestamps |
-| `PrintJob` | Durable print queue entity for prep tickets and receipts; tracks status, attempts, errors, formatted payload, idempotency key |
-| `PaymentConnection` | Per-business provider/environment/merchant record with encrypted credential ciphertext and `verified_at` |
-| `PaymentTransaction` | Per-order payment lifecycle entity; provider, environment, transaction ID, merchant reference, QRIS payload, 10-minute expiry, status, paid timestamp |
-| `PaymentWebhookEvent` | Append-only raw webhook audit log; provider, request digest, headers, payload, signature validation, processed flag |
-| `Category` | Business catalog category |
-| `Product` | Business catalog item with optional category, routed station, SKU, decimal price, and active flag |
-| `Customer` | Business customer contact record |
-| `InventoryItem` | Business stock item with SKU, unit, active flag |
-| `InventoryBalance` | Quantity of an inventory item at a location |
-| `StockMovement` | Append-only stock movement with quantity delta, reason, idempotency key and actor/device context |
-| `RecipeLine` | Product-to-inventory-item quantity relation; ingredient quantity used for locked stock consumption on preparation and returns on cancellation |
-| `Order` | Business order with optional location/customer, snapshots, idempotency fields, order type, status and total |
-| `OrderLine` | Product name and unit-price snapshot plus quantity |
-| `OutboxEvent` | Durable pending event payload, retry timing, published timestamp, attempt count and last error |
-| `AuditEvent` | Append-only business audit record with actor, action, object identifiers and metadata |
+| Entities | Relationships and constraints |
+| --- | --- |
+| Category, Product, ProductImage | Tenant-scoped catalog. Category and station references on Product are optional. ProductImage stores normalized bytes linked to its product. |
+| ModifierGroup, ModifierOption, Promotion, Voucher | Groups link to products and locations, and each option belongs to a group. Promotions and vouchers have optional product/category/location targets. Voucher codes are normalized and unique per business. Usage is committed with order creation under locks. |
+| GuestCart, Customer and Order | A cart has exactly one table or pickup location scope, is unique per session and scope, and may link to its checked-out order. Customer belongs to a business. An order can reference a location, table, customer, creating user or paired device. |
+| OrderLine and OrderLinePromotion | A line references a product and freezes name, category, price, quantities, modifier choices and discount data at checkout. Promotion details are saved separately against the line. Reports and receipts can use captured values after edits to the catalog. |
+| PaymentConnection, PaymentTransaction, OrderTender and OrderRefund | Tenant provider connection is unique by business and provider. Payment attempts link to an order and its connection. Tender records staff-confirmed money. Refund records bind to exactly one eligible capture source and keep positive amounts and independent status. Order and payment idempotency are constrained. Refund requests reserve the refundable amount and never rewrite the original capture. |
+| Supplier, PurchaseOrder, PurchaseOrderLine, PurchaseReceipt, PurchaseReceiptLine | Business owns supplier and order. Purchase orders reference location, supplier and creator. A receipt references the order and actor. A receipt line links to the original purchase line. Constraints guard duplicate references, receipt replays and invalid amounts. |
+| InventoryItem, InventoryBalance, RecipeLine, StockMovement | Balance is unique per item and location and cannot go negative. Recipes reference product and ingredient. Stock movements record tenant, item, location and optional cause, including order and receipt line. Transactional locks protect state changes and the append-only ledger explains deltas. |
+| StockCount and SupplierReturn | A count links to a balance and optionally a ledger movement when the quantity changes. A return links to the received purchase line and its reversing stock movement. Returns cannot exceed the received balance or consume unavailable stock. |
 
-## Relationship overview
+## Billing and operational data
 
-- A `User` can own multiple `Business` records.
-- A `User` can have memberships in multiple businesses.
-- A `Business` has locations, catalog records, customers, inventory, orders, stations, printers, print jobs, payment connections, payment transactions, and audit/outbox events.
-- A `Station` may be scoped to one `Location` and has pairing codes, paired devices, and assigned printers.
-- A `Product` can specify a routed `Station` for kitchen/bar dispatch.
-- An `Order` has order lines and may reference a customer, location, user, and paired device.
-- An `Order` generates routed preparation `PrintJob` records and tracks `PaymentTransaction` records.
-- An `InventoryItem` has location-specific balances and stock movements.
-- A `Product` has recipe lines used when an order enters preparation; linked sale/return StockMovement records prevent duplicate recipe consumption and preserve cancellation history.
+BusinessSubscription has one business, current plan, and optional pending plan. BillingInvoice retains subscription and plan references and the agreed price and period. BillingAttempt records provider attempts under an invoice. Constraints prevent multiple open invoices or pending attempts in the protected scope. SubscriptionEvent retains append-only plan/access changes with an optional actor. Tenant payment tables are separate from these billing tables.
 
-## Important integrity and behavior notes
+AuditEvent preserves important actions. PaymentWebhookEvent records replay and processing evidence. PrintJob holds a durable job linked to an order and optional printer or station. OutboxEvent holds pending delivery work. Application-level append-only protections do not replace database-role restrictions or backups.
 
-- Order line names and unit prices are snapshots. Later product edits do not rewrite historical order line details.
-- Customer name/email/phone snapshots are stored on an order when a customer is selected.
-- Order creation supports an idempotency key and request digest to prevent accidental duplicate submissions and detect key reuse with a different payload.
-- Stock movements and audit events use append-only queryset/model protections in the current code.
-- Inventory balance is location-specific. Stock adjustment rejects invalid cross-tenant item/location combinations and negative resulting stock.
-- Tenant scoping must be maintained in every new query and service.
-- `Business.owner` is canonical ownership. Owner membership rows remain for compatibility with existing membership-based flows.
-- `WorkspaceAssignment.permissions` must not be treated as a grant of station or Management access.
-
-## Migrations
-
-The current migration sequence includes initial domain schema, order metadata/idempotency, customers and inventory, outbox events, customer snapshots, invitations, and owner/station/payment-connection additions. Run `python manage.py migrate` to apply migrations. Do not edit already-applied migrations in shared environments; create new migrations for schema changes.
-
-## Additive migrations 0010–0018
-
-0010–0012 add revocable dining tables, order source and private guest tracking/payment selection. 0013 adds scheduled promotions, line promotion snapshots and historic base-price backfill. 0014 persists schedule state for restart-safe boundary detection. 0015 links stock movements to orders and constrains order/item/reason uniqueness. 0016–0017 add cashier tender records and cash/card consistency constraints. 0018 adds SubscriptionPlan, BusinessSubscription and append-only SubscriptionEvent; its data migration explicitly preserves existing businesses with grandfathered access. New business service creates an audited 14-day trial.
-
-Promotion targets include products, categories and locations; OrderLinePromotion preserves applied amounts. OrderTender is one-to-one with Order and records staff method/amount, cash received/change and retry identity. BusinessSubscription is one-to-one with Business and protects its Plan; feature/limit JSON gates selected workflows. Audit and subscription history use application-level append-only protections. No schema changes were needed for the 2026-11-17 verification-resend/readiness/logging changes.
+Use [migration files](../core/migrations/) for exact history. The latest core file is [0037_ordering_page_builder](../core/migrations/0037_ordering_page_builder.py), which adds drafts and publication history while preserving the previous live design fields. [Development](DEVELOPMENT.md#routine-checks) · [Backup and restore](DEPLOYMENT.md#backup-and-restore)

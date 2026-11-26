@@ -1,13 +1,14 @@
+from django.core.exceptions import PermissionDenied
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Q
-from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from .page_errors import access_restricted
 from .forms import CategoryForm, ProductForm
 from .media_services import record_menu_change
 from .models import Business, ProductImage, PromotionBanner, Voucher
@@ -44,20 +45,31 @@ def catalog(request, slug, product_id=None):
     membership = membership_for(request, slug)
     can_manage = membership.allows("catalog.manage")
     if not membership.allows("catalog.view") or ((product_id or request.method == "POST") and not can_manage):
-        return HttpResponseForbidden("You do not have access to this catalog action.")
+        raise PermissionDenied
     business = membership.business
     products = business.products.select_related("category", "image").defer("image__content").order_by("name", "pk")
     product = get_object_or_404(products, pk=product_id) if product_id else None
-    form = ProductForm(business=business, instance=product)
+    def product_form(product, *args, **kwargs):
+        form = ProductForm(*args, business=business, instance=product, **kwargs)
+        stations = membership.scope_locations(form.fields["station"].queryset)
+        if product and product.station_id and not stations.filter(pk=product.station_id).exists():
+            raise PermissionDenied("Only staff with access to the assigned station can edit this product.")
+        form.fields["station"].queryset = stations
+        return form
+
+    form = product_form(product)
     if request.method == "POST":
         try:
             with transaction.atomic():
                 business = Business.objects.select_for_update().get(pk=business.pk)
+                membership = membership_for(request, slug)
+                if not membership.allows("catalog.manage"):
+                    raise PermissionDenied
                 require_business_feature(business, "catalog")
                 if product_id:
                     product = get_object_or_404(products.select_for_update(of=("self",)), pk=product_id)
                 previously_active = bool(product and product.active)
-                form = ProductForm(request.POST, request.FILES, business=business, instance=product)
+                form = product_form(product, request.POST, request.FILES)
                 if form.is_valid():
                     if form.cleaned_data["active"] and not previously_active:
                         enforce_business_limit(business, "products", business.products.filter(active=True).count())
@@ -67,7 +79,7 @@ def catalog(request, slug, product_id=None):
                     messages.success(request, "Product saved." if product_id else "Product added.")
                     return redirect("catalog", slug=slug)
         except PermissionError as error:
-            return HttpResponseForbidden(str(error))
+            return access_restricted(request, str(error))
     search = request.GET.get("q", "").strip()[:160]
     if search:
         products = products.filter(Q(name__icontains=search) | Q(sku__icontains=search) | Q(category__name__icontains=search))
@@ -79,6 +91,7 @@ def catalog(request, slug, product_id=None):
     return render(request, "core/catalog.html", {
         **page_results(request, products),
         "business": business, "form": form, "editing": product, "can_manage": can_manage,
+        "can_manage_campaigns": can_manage and not membership.location_restricted,
         "search": search, "category_id": category_id, "categories": business.categories.all(),
     }, status=400 if request.method == "POST" else 200)
 
@@ -89,7 +102,7 @@ def categories(request, slug, category_id=None):
     membership = membership_for(request, slug)
     can_manage = membership.allows("catalog.manage")
     if not membership.allows("catalog.view") or ((category_id or request.method == "POST") and not can_manage):
-        return HttpResponseForbidden("You do not have access to this category action.")
+        raise PermissionDenied
     business = membership.business
     category = get_object_or_404(business.categories, pk=category_id) if category_id else None
     form = CategoryForm(business=business, instance=category)
@@ -98,6 +111,9 @@ def categories(request, slug, category_id=None):
         try:
             with transaction.atomic():
                 business = Business.objects.select_for_update().get(pk=business.pk)
+                membership = membership_for(request, slug)
+                if not membership.allows("catalog.manage"):
+                    raise PermissionDenied
                 require_business_feature(business, "catalog")
                 if category_id:
                     category = get_object_or_404(business.categories.select_for_update(), pk=category_id)
@@ -121,7 +137,7 @@ def categories(request, slug, category_id=None):
                         messages.success(request, "Category saved." if category_id else "Category added.")
                         return redirect("categories", slug=slug)
         except PermissionError as error:
-            return HttpResponseForbidden(str(error))
+            return access_restricted(request, str(error))
     query = request.GET.get("q", "").strip()[:100]
     listing = business.categories.filter(Q(name__icontains=query) | Q(description__icontains=query)).annotate(product_count=Count("products"))
     return render(request, "core/categories.html", {

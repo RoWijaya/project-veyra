@@ -20,9 +20,9 @@
       </details>{% endif %}
     </article>{% empty %}<div class="inline-empty">Add a location to start organizing operations by place.</div>{% endfor %}</div>
     </section>
-    {% if can_manage %}<aside class="form-card"><p class="eyebrow">GROW YOUR FOOTPRINT</p><h2>Add a location</h2>
+    {% if can_add_location %}<aside class="form-card"><p class="eyebrow">GROW YOUR FOOTPRINT</p><h2>Add a location</h2>
       
-      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<label class="field"><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}{% if field.errors %}<small class="field-error" id="{{ field.auto_id }}_error">{{ field.errors|striptags }}</small>{% endif %}</label>{% endfor %}<button class="button button-dark form-submit">Save location <span aria-hidden="true">↗</span></button></form>
+      <form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}{% include "core/purchasing_field.html" %}{% endfor %}<button class="button button-dark form-submit">Save location <span aria-hidden="true">↗</span></button></form>
     </aside>{% endif %}
   </div>
 </section>

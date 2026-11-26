@@ -8,7 +8,7 @@
   </div>
   <nav class="catalog-actions" aria-label="Catalog management">
     <a class="button button-light" href="{% url 'categories' business.slug %}">Categories</a>
-    {% if can_manage %}<a class="button button-light" href="{% url 'modifier_groups' business.slug %}">Product options</a>
+    {% if can_manage_campaigns %}<a class="button button-light" href="{% url 'modifier_groups' business.slug %}">Product options</a>
     <a class="button button-light" href="{% url 'promotions' business.slug %}">Scheduled promotions</a>{% endif %}
   </nav>
   <div class="catalog-layout{% if editing %} catalog-editing{% endif %}">

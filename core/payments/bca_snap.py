@@ -2,13 +2,13 @@ import hashlib
 import hmac
 import json
 import urllib.request
-import urllib.error
-from datetime import timedelta
+from datetime import datetime, timedelta
+from uuid import uuid4
 from decimal import Decimal
 from typing import Any, Dict, Tuple
 from django.utils import timezone
 
-from .base import BasePaymentAdapter, PaymentResult
+from .base import BasePaymentAdapter, PaymentResult, qris_start_time
 
 
 class BcaSnapAdapter(BasePaymentAdapter):
@@ -42,6 +42,8 @@ class BcaSnapAdapter(BasePaymentAdapter):
         order,
         amount: Decimal,
         expiry_minutes: int = 10,
+        merchant_reference: str = "",
+        requested_at: datetime | None = None,
     ) -> PaymentResult:
         client_id = credentials.get("client_id", "").strip()
         client_secret = credentials.get("client_secret", "").strip()
@@ -50,10 +52,10 @@ class BcaSnapAdapter(BasePaymentAdapter):
         if not (client_id and client_secret):
             return PaymentResult(success=False, error="BCA SNAP client_id and client_secret are required")
 
-        merchant_ref = f"BCA-{str(order.pk)[:8]}-{int(timezone.now().timestamp())}"
-        now = timezone.now()
+        merchant_ref = merchant_reference or uuid4().hex
+        now = qris_start_time(requested_at)
         expires_at = now + timedelta(minutes=expiry_minutes)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S+07:00")
+        timestamp = now.isoformat(timespec="seconds")
 
         endpoint_path = "/api/v1.0/qr/qr-mpm-generate"
         payload = {
@@ -64,7 +66,7 @@ class BcaSnapAdapter(BasePaymentAdapter):
             },
             "merchantId": connection.merchant_id or client_id,
             "terminalId": "00000001",
-            "validityPeriod": expires_at.strftime("%Y-%m-%dT%H:%M:%S+07:00"),
+            "validityPeriod": expires_at.isoformat(timespec="seconds"),
         }
 
         minified_body = json.dumps(payload, separators=(",", ":"))
@@ -92,17 +94,13 @@ class BcaSnapAdapter(BasePaymentAdapter):
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
-        except urllib.error.HTTPError as error:
-            try:
-                data = json.loads(error.read().decode())
-                err_msg = data.get("responseMessage") or str(error)
-            except Exception:
-                err_msg = str(error)
-            return PaymentResult(success=False, error=f"BCA SNAP error: {err_msg}")
-        except Exception as error:
-            return PaymentResult(success=False, error=f"Connection failure: {error}")
+        except (OSError, ValueError):
+            # A transport failure does not tell us whether the provider accepted the request.
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-        response_code = data.get("responseCode", "")
+        response_code = str(data.get("responseCode", ""))
         # SNAP success codes start with '200'
         if response_code.startswith("200"):
             qr_content = data.get("qrContent", "")
@@ -120,7 +118,8 @@ class BcaSnapAdapter(BasePaymentAdapter):
             )
         return PaymentResult(
             success=False,
-            error=data.get("responseMessage", "Failed to generate BCA QRIS"),
+            error="BCA SNAP did not confirm that a QR code was created.",
+            uncertain=True,
             raw_response=data,
         )
 
@@ -142,6 +141,12 @@ class BcaSnapAdapter(BasePaymentAdapter):
         timestamp = norm_headers.get("x-timestamp", "")
         if not (sig_header and timestamp):
             return False, "Missing X-SIGNATURE or X-TIMESTAMP header"
+
+        try:
+            if timezone.is_naive(datetime.fromisoformat(timestamp)):
+                return False, "X-TIMESTAMP must include a UTC offset"
+        except ValueError:
+            return False, "Invalid X-TIMESTAMP"
 
         endpoint_path = "/api/v1.0/qr/qr-mpm-notify"
         minified_body = raw_body.decode("utf-8") if isinstance(raw_body, bytes) else str(raw_body)
@@ -173,9 +178,9 @@ class BcaSnapAdapter(BasePaymentAdapter):
         tx_status = payload.get("latestTransactionStatus", "")
         if tx_status == "00":
             status = "paid"
-        elif tx_status in ("03", "04"):
+        elif tx_status in ("05", "06", "09"):
             status = "failed"
-        elif tx_status == "05":
+        elif tx_status == "08":
             status = "expired"
         else:
             status = "pending"

@@ -1,6 +1,7 @@
 .storefront { font-size: 16px; --muted: #625a51; }
 .store-header { background: #33271f; color: var(--white); padding: 16px max(20px, calc((100% - 1100px) / 2)); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.store-brand { font: 28px/1.2 var(--serif); overflow-wrap: anywhere; }
+.store-logo { flex: none; border-radius: 7px; object-fit: contain; }
+.store-brand { display: flex; align-items: center; gap: 8px; min-inline-size: 0; font: 28px/1.2 var(--serif); overflow-wrap: anywhere; }
 .store-header .button { white-space: nowrap; }
 .storefront .button { min-height: 48px; font-size: 16px; gap: 8px; border-radius: var(--radius-control); padding: 10px 18px; }
 .storefront .button:hover { transform: none; }
@@ -96,3 +97,31 @@
 .store-product-description { color: var(--muted); }
 .store-banner:has(img[hidden]) > div { width: 100%; }
 @media (max-width: 600px) { .store-page-banner { aspect-ratio: 2 / 1; max-height: 200px; } }
+
+.storefront { --store-gutter: clamp(16px, 4vw, 36px); }
+.store-header { background: var(--espresso); padding-inline: max(var(--store-gutter), calc((100% - 1108px) / 2)); }
+.store-main { padding-inline: var(--store-gutter); }
+.storefront h1 { margin-block: var(--space-2) var(--space-4); }
+.store-location { margin: 0; font-size: .875rem; }
+.store-filters { gap: var(--space-3); margin-block: var(--space-6) var(--space-4); }
+.store-filters .field { max-width: none; }
+.store-categories .button { min-height: 44px; border-color: var(--line-control); }
+.store-product { padding-block: var(--space-3) var(--space-4); }
+.store-product-heading h2 { margin-top: 0; }
+.store-cart-item { border: 1px solid var(--line); }
+.store-payment label:has(input:checked) { border-color: var(--coffee); }
+.store-connection { margin-top: var(--space-4); }
+
+/* Keep long category lists within the menu at phone widths. Focus follows the native buttons. */
+@media (max-width: 600px) {
+  .store-filters { min-inline-size: 0; }
+  .store-categories {
+    flex-wrap: nowrap;
+    max-inline-size: 100%;
+    overflow-x: auto;
+    padding: 5px 5px var(--space-2);
+    scroll-padding-inline: 5px;
+  }
+  .store-categories .button { flex: none; max-inline-size: min(16rem, 100%); }
+  .storefront .store-main { padding-top: var(--space-4); }
+}

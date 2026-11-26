@@ -1,12 +1,13 @@
 from django import forms
+from django.core.exceptions import PermissionDenied
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from .page_errors import access_restricted
 from .models import AuditEvent, Business, ModifierGroup, ModifierOption, OutboxEvent
 from .services import require_business_feature
 
@@ -20,7 +21,7 @@ class ModifierGroupForm(forms.ModelForm):
             "max_selections": "Use one for single selection.",
             "locations": "Leave empty to offer these options at all locations.",
         }
-        widgets = {"products": forms.CheckboxSelectMultiple, "locations": forms.CheckboxSelectMultiple}
+        widgets = {"products": forms.SelectMultiple(attrs={"size": 6}), "locations": forms.SelectMultiple(attrs={"size": 4})}
 
     def __init__(self, *args, business, **kwargs):
         super().__init__(*args, **kwargs)
@@ -73,8 +74,8 @@ def modifiers(request, slug, group_id=None):
     from .views import membership_for
 
     membership = membership_for(request, slug)
-    if not membership.allows("catalog.manage"):
-        return HttpResponseForbidden("You cannot manage product customization.")
+    if not membership.allows("catalog.manage") or membership.location_restricted:
+        raise PermissionDenied
     business = membership.business
 
     def editor():
@@ -86,7 +87,7 @@ def modifiers(request, slug, group_id=None):
         try:
             require_business_feature(business, "catalog")
         except PermissionError as error:
-            return HttpResponseForbidden(str(error))
+            return access_restricted(request, str(error))
         with transaction.atomic():
             Business.objects.select_for_update().get(pk=business.pk)
             form, option_forms = editor()

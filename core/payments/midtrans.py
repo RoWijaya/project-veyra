@@ -2,14 +2,39 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import urllib.request
 import urllib.error
-from datetime import timedelta
+from urllib.parse import quote
+from uuid import uuid4
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Tuple
-from django.utils import timezone
 
-from .base import BasePaymentAdapter, PaymentResult
+import requests
+
+from .base import BasePaymentAdapter, PaymentResult, qris_start_time
+
+
+def valid_notification_signature(payload, secret):
+    if not secret or not isinstance(payload, dict):
+        return False
+    reference, code, amount, signature = (
+        payload.get(key) for key in ("order_id", "status_code", "gross_amount", "signature_key")
+    )
+    if (
+        not isinstance(reference, str) or not reference or len(reference) > 120 or not reference.isascii()
+        or type(code) not in (str, int) or not re.fullmatch(r"[0-9]{3}", str(code))
+        or type(amount) not in (str, int) or not re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,2})?", str(amount))
+        or not isinstance(signature, str) or not re.fullmatch(r"[0-9a-fA-F]{128}", signature)
+    ):
+        return False
+    expected = hashlib.sha512(f"{reference}{code}{amount}{secret}".encode()).hexdigest()
+    return hmac.compare_digest(expected, signature.lower())
+
+
+class MidtransStatusUnavailable(RuntimeError):
+    pass
 
 
 class MidtransAdapter(BasePaymentAdapter):
@@ -19,6 +44,51 @@ class MidtransAdapter(BasePaymentAdapter):
     def _get_base_url(self, environment: str) -> str:
         return self.SANDBOX_BASE if environment == "sandbox" else self.PROD_BASE
 
+    def _transaction_request(self, *, connection, credentials, reference, operation, data=None):
+        key = credentials.get("server_key", "").strip()
+        auth = base64.b64encode(f"{key}:".encode()).decode()
+        url = f"{self._get_base_url(connection.environment)}/{quote(reference, safe='')}/{operation}"
+        request = urllib.request.Request(
+            url, data=json.dumps(data).encode() if data is not None else None,
+            headers={"Accept": "application/json", "Content-Type": "application/json", "Authorization": f"Basic {auth}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = json.loads(response.read())
+        except (OSError, ValueError) as error:
+            raise MidtransStatusUnavailable("Midtrans did not provide a verifiable response.") from error
+        if not isinstance(result, dict):
+            raise MidtransStatusUnavailable("Midtrans did not provide a verifiable response.")
+        return result
+
+    def transaction_status(self, *, connection, credentials, reference):
+        return self._transaction_request(
+            connection=connection, credentials=credentials, reference=reference, operation="status",
+        )
+
+    def verify_transaction(self, payment, payload, *, allow_unbound=False):
+        provider_id, reference, amount, _ = self.parse_webhook_status(payload)
+        if (
+            not isinstance(provider_id, str) or not provider_id or len(provider_id) > 120
+            or (payment.provider_transaction_id != provider_id
+                and (payment.provider_transaction_id or not allow_unbound))
+            or reference != payment.merchant_reference or not amount.is_finite() or amount != payment.amount
+            or payload.get("currency", "IDR") != payment.currency or payload.get("payment_type") != "qris"
+            or payload.get("merchant_id", payment.connection.merchant_id) != payment.connection.merchant_id
+        ):
+            raise MidtransStatusUnavailable("Midtrans status did not match the original QRIS payment.")
+
+    def cancel_transaction(self, *, connection, credentials, reference):
+        return self._transaction_request(
+            connection=connection, credentials=credentials, reference=reference, operation="cancel", data={},
+        )
+
+    def request_refund(self, *, connection, credentials, reference, key, amount, reason):
+        return self._transaction_request(
+            connection=connection, credentials=credentials, reference=reference, operation="refund/online/direct",
+            data={"refund_key": key, "amount": int(amount), "reason": reason},
+        )
+
     def create_qris(
         self,
         *,
@@ -27,13 +97,17 @@ class MidtransAdapter(BasePaymentAdapter):
         order,
         amount: Decimal,
         expiry_minutes: int = 10,
+        merchant_reference: str = "",
+        requested_at: datetime | None = None,
     ) -> PaymentResult:
         server_key = credentials.get("server_key", "").strip()
         if not server_key:
             return PaymentResult(success=False, error="Midtrans server_key is required")
 
-        merchant_ref = f"ORD-{str(order.pk)[:8]}-{int(timezone.now().timestamp())}"
-        now = timezone.now()
+        if amount <= 0 or amount != amount.to_integral_value():
+            return PaymentResult(success=False, error="Midtrans QRIS requires a positive whole-rupiah total.")
+        merchant_ref = merchant_reference or f"ORD-{order.pk.hex}-{uuid4().hex[:10]}"
+        now = qris_start_time(requested_at)
         expires_at = now + timedelta(minutes=expiry_minutes)
 
         int_amount = int(amount)
@@ -47,7 +121,7 @@ class MidtransAdapter(BasePaymentAdapter):
                 "acquirer": "gopay",
             },
             "custom_expiry": {
-                "order_time": now.strftime("%Y-%m-%d %H:%M:%S +0700"),
+                "order_time": now.strftime("%Y-%m-%d %H:%M:%S %z"),
                 "expiry_duration": expiry_minutes,
                 "unit": "minute",
             },
@@ -69,20 +143,21 @@ class MidtransAdapter(BasePaymentAdapter):
                 data = json.loads(resp.read().decode())
         except urllib.error.HTTPError as error:
             try:
-                data = json.loads(error.read().decode())
-                err_msg = data.get("status_message") or str(error)
-            except Exception:
-                err_msg = str(error)
-            return PaymentResult(success=False, error=f"Midtrans error: {err_msg}")
-        except Exception as error:
-            return PaymentResult(success=False, error=f"Connection failure: {error}")
+                data = json.loads(error.read())
+            except (OSError, ValueError):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-        status_code = data.get("status_code", "")
+        status_code = str(data.get("status_code", ""))
         if status_code in ("200", "201"):
-            actions = data.get("actions", [])
+            actions = data.get("actions")
+            actions = actions if isinstance(actions, list) else []
             qr_image_url = ""
             for action in actions:
-                if action.get("name") == "generate-qr-code":
+                if isinstance(action, dict) and action.get("name") == "generate-qr-code":
                     qr_image_url = action.get("url", "")
                     break
 
@@ -101,7 +176,8 @@ class MidtransAdapter(BasePaymentAdapter):
             )
         return PaymentResult(
             success=False,
-            error=data.get("status_message", "Failed to generate QRIS"),
+            error="Midtrans did not confirm that a QR code was created.",
+            uncertain=status_code not in ("400", "401", "402", "403"),
             raw_response=data,
         )
 
@@ -114,25 +190,11 @@ class MidtransAdapter(BasePaymentAdapter):
         headers: Dict[str, Any],
         raw_body: bytes,
     ) -> Tuple[bool, str]:
-        server_key = credentials.get("server_key", "").strip()
-        if not server_key:
-            return False, "Server key missing"
+        # A stored legacy bundle can still verify callbacks for existing payments.
+        secret = credentials.get("signature_secret_key", credentials.get("server_key", ""))
+        valid = valid_notification_signature(payload, secret)
+        return valid, "" if valid else "Signature mismatch"
 
-        signature_key = payload.get("signature_key", "")
-        order_id = payload.get("order_id", "")
-        status_code = payload.get("status_code", "")
-        gross_amount = payload.get("gross_amount", "")
-
-        if not (signature_key and order_id and status_code and gross_amount):
-            return False, "Missing fields for signature verification"
-
-        # Midtrans signature key: SHA512(order_id + status_code + gross_amount + ServerKey)
-        data = f"{order_id}{status_code}{gross_amount}{server_key}"
-        computed = hashlib.sha512(data.encode()).hexdigest()
-
-        if hmac.compare_digest(computed.lower(), signature_key.lower()):
-            return True, ""
-        return False, "Signature mismatch"
 
     def parse_webhook_status(
         self, payload: Dict[str, Any]
@@ -162,6 +224,37 @@ class MidtransAdapter(BasePaymentAdapter):
             status = "pending"
 
         return provider_tx_id, merchant_ref, amount, status
+
+    def check_qris_evidence(self, *, connection, credentials, reference):
+        url = f"{self._get_base_url(connection.environment)}/{quote(reference, safe='')}/status"
+        try:
+            response = requests.get(
+                url, auth=(credentials["server_key"], ""), timeout=(3, 6), allow_redirects=False,
+            )
+            if response.status_code == 401:
+                return "failed", "Midtrans rejected the Server Key for this environment."
+            if response.status_code == 403:
+                return "failed", "The Server Key lacks access to Midtrans Core API status."
+            if response.status_code == 404:
+                return "failed", "Midtrans could not find the reference in this environment."
+            if not 200 <= response.status_code < 300:
+                return "failed", "Midtrans could not verify the reference. Try again later."
+            result = response.json()
+        except requests.Timeout:
+            return "failed", "The Midtrans verification timed out. Try again."
+        except (requests.RequestException, ValueError):
+            return "failed", "Midtrans verification is temporarily unavailable."
+        if not isinstance(result, dict) or str(result.get("status_code")) not in ("200", "201"):
+            return "failed", "Midtrans did not return a verifiable transaction."
+        if reference not in (result.get("order_id"), result.get("transaction_id")):
+            return "failed", "The transaction response did not match the reference."
+        if result.get("merchant_id") != connection.merchant_id:
+            return "authenticated", "The transaction did not match the configured Merchant ID."
+        if result.get("payment_type") != "qris" or result.get("currency", "IDR") != "IDR":
+            return "authenticated", "Use a QRIS transaction in IDR from this Midtrans merchant."
+        if not valid_notification_signature(result, credentials["signature_secret_key"]):
+            return "authenticated", "The Signature Secret Key did not match the signed Midtrans response."
+        return "evidence", "Merchant, QRIS history and signing key checked. Core API Write and callback approval are separate."
 
     def verify_credentials(
         self, *, connection, credentials: Dict[str, Any]

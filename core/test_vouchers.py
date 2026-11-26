@@ -278,6 +278,7 @@ class VoucherWorkflowTests(VoucherFixture, TestCase):
                 "transaction_status": provider_status, "fraud_status": "accept",
                 "transaction_id": transaction_id, "signature_key": signature,
             }
+            mocked.read.return_value = json.dumps({**notification, "payment_type": "qris"}).encode()
             webhook = reverse("payment_webhook", args=["midtrans"])
             for _ in range(2):
                 self.assertEqual(guest.post(webhook, notification, content_type="application/json").status_code, 200)

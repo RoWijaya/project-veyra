@@ -1,0 +1,20 @@
+<section class="builder-catalog" data-builder-list="{{ kind }}" aria-label="{{ title }}">
+  <h3>{{ title }}</h3>
+  {% if rows %}
+  <label class="field" data-builder-search-field hidden><span>Find {{ title|lower }}</span><input type="search" data-builder-search autocomplete="off"></label>
+  <ul data-builder-rows>
+  {% for row in rows %}<li data-builder-row="{{ row.pk }}" data-builder-name="{{ row.name }}">
+    <div class="builder-item-label"><strong>{{ row.name }}</strong>{% if not row.active %}<small>Inactive in catalog</small>{% endif %}</div>
+    <div class="builder-item-options">
+      <label><input type="checkbox" name="select_hidden_{% if kind == 'category' %}categories{% else %}products{% endif %}" value="{{ row.pk }}"{% if row.hidden %} checked{% endif %}> <span>Hide<span class="sr-only"> {{ row.name }}</span></span></label>
+      {% if kind == "product" %}<label><input type="checkbox" name="select_featured_products" value="{{ row.pk }}"{% if row.featured %} checked{% endif %}> <span>Feature<span class="sr-only"> {{ row.name }}</span></span></label>{% endif %}
+    </div>
+    <div class="builder-item-order" data-row-controls hidden>
+      <button type="button" class="button button-light" data-move="-1" aria-label="Move {{ row.name }} up">Up</button>
+      <button type="button" class="button button-light" data-move="1" aria-label="Move {{ row.name }} down">Down</button>
+    </div>
+  </li>{% endfor %}
+  </ul>
+  <p class="field-hint" data-builder-list-status role="status"></p>
+  {% else %}<p class="inline-empty">Add {{ title|lower }} in the catalog to customize how they appear.</p>{% endif %}
+</section>

@@ -1,42 +1,41 @@
 # Operations
 
-## Identity deployment and recovery
+[Deployment](DEPLOYMENT.md) covers release topology, configuration and backup/restore. [Development](DEVELOPMENT.md) covers local startup.
 
-Apply migration 0019 before starting this release. Configure Google web-client credentials/exact HTTPS callback and a separate stable ACCOUNT_SECURITY_ENCRYPTION_KEY before TOTP enrollment. Back up that key securely with encrypted database backups. Never log provisioning URIs, secrets or recovery codes. Missing configuration prevents enrollment; changing a key without re-encryption breaks existing factors.
+## Workers and health
 
-Keep MFA_REQUIRE_PRIVILEGED=true in production; it defaults on when DEBUG is false. Platform administrators use normal login/MFA before Django admin. Users must save recovery codes when first displayed. Each works once; password reset does not remove MFA. No email-only or support endpoint bypasses MFA, and no assisted total-loss recovery flow exists. Establish a reviewed recovery procedure before production use.
+| Command | Responsibility | Default interval |
+| --- | --- | --- |
+| ``python manage.py process_outbox`` | Publish due operational events to Channels, check pricing and banner schedule boundaries, and deliver private media archive work. | Two seconds when idle. |
+| ``python manage.py process_account_mail`` | Deliver queued account verification, retry temporary failures and retain terminal delivery state. | Two seconds while idle, with bounded backoff per delivery. |
+| ``python manage.py process_billing`` | Advance subscription boundaries, manage renewals and reconcile pending platform attempts. | 60 seconds. |
+| ``python manage.py process_refunds`` | Check pending Midtrans refunds using provider status. It does not submit new refunds. | 60 seconds, with per-refund retry timing. |
+| ``python manage.py check_realtime`` | Send and receive an actual Channels group message. Run against the target Redis connection. | On demand. |
 
-## Startup and releases
+All four workers accept ``--once`` for a single cycle and ``--interval`` for polling frequency. Long-running workers record progress with a 180-second Redis heartbeat and stop between bounded jobs on shutdown. The staging supervisor restarts a crashed process. Use `python manage.py check_worker <name>` and `python manage.py check_operational_queues` for heartbeats, delayed work and terminal mail/print failures. Alert on failures and review pending event ages before resuming service. Outbox retries keep authoritative events in PostgreSQL. Printing uses external paired devices, with app-level queue and acknowledgement status.
 
-Follow [DEVELOPMENT-AND-DEPLOYMENT.md](DEVELOPMENT-AND-DEPLOYMENT.md) for environment setup. Preserve `.env`, encryption keys and PostgreSQL/Redis volumes. Start dependencies with `docker compose up -d postgres redis`. Apply additive migrations with `.venv\Scripts\python.exe manage.py migrate`; never reset the database to solve a migration failure. Production runs `uvicorn config.asgi:application --no-access-log` behind a trusted TLS proxy, plus a separately supervised `python manage.py process_outbox` worker.
+``GET /healthz/`` reports liveness. ``GET /readyz/`` runs a PostgreSQL query and Redis PING. It returns 503 with a generic unavailable status if either dependency fails. It does not verify workers, migration level, email, or payment-provider connectivity.
 
-Set strong `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=false`, allowed hosts, private DB/Redis URLs, stable payment encryption key and SMTP. Run `collectstatic`, `check --deploy`, migration checks and PostgreSQL/Redis tests before release. The Compose file currently supplies dependency services only; it does not deploy or supervise the app/worker.
+## Logging and triage
 
-## Health and logs
+- Use the response's ``X-Request-ID``, timestamp and route pattern to locate ``request.completed``. Allowlisted app events carry method, route pattern, duration and status without raw paths, request bodies, tokens, or arbitrary exception text. Keep reverse proxy access logs and debug console mail private.
+- Check dependency readiness, then worker supervision. Check unpublished outbox count, oldest creation time, attempts and next retry. Confirm the current resource in an authorized browser after reconnect.
+- For access issues, confirm owner or membership, active state, permission, applicable location and entitlements. Revoke a lost device in Management. For account recovery, a stored recovery code can satisfy MFA once. Password recovery preserves MFA. There is no assisted total-loss endpoint.
+- Use sanitized internal IDs when coordinating a payment incident. Compare verified provider transactions with scoped Veyra records. Leave ambiguous attempts unresolved until authoritative evidence arrives.
 
-`GET /healthz/` is liveness. `GET /readyz/` checks PostgreSQL and Redis; success is `{"status":"ready"}`, failure is HTTP 503 with `{"status":"unavailable"}`. Responses prohibit caching. Redis uses two-second connect/read timeouts; DB uses configured five-second connection timeout. Readiness cannot establish worker, email, payment-provider or schema readiness.
+Worker heartbeats and aggregate queue diagnostics are available in the staging image. Hosted acceptance still needs a protected log collector, an alert destination and tested escalation. Classify repeated SMTP or Resend errors before reviewing or requeuing affected verification jobs. The worker records provider acceptance without asserting inbox delivery. A resend can create a fresh request after a terminal failure. SMTP acknowledgement loss can produce duplicate emails, while activation still consumes eligibility exactly once.
 
-HTTP responses include `X-Request-ID`. JSON `request.completed` logs include request ID, HTTP method, route pattern, status and duration. Raw paths/query strings, request bodies, cookies, arbitrary messages and exception text are excluded. A validated incoming 32-character lowercase hexadecimal ID is retained; otherwise one is generated. IDs correlate requests and are not authentication credentials. `readiness.failed` and `outbox.delivery_failed` are operational error events. Outbox failures persist an exception class and retry schedule, excluding exception secrets.
+## Investigate an unconfirmed QRIS attempt
 
-Disable full-URL access logs at Uvicorn and the reverse proxy. Debug console email contains verification links by design; keep it local. Logs lack full stack traces, metrics and external exception tracking. Configure a protected collector, retention policy and alerts for 5xx, readiness failures, repeated outbox failures and oldest unpublished event age. No alert destination or external collector is configured here.
+1. Find the order and merchant reference in the tenant payment records. For Midtrans, use the existing payment retry to request current provider status.
+2. Treat an unresolved attempt as a hold on collection. Wait for authenticated terminal evidence before generating another QR or collecting cash or card. BCA currently depends on callbacks for this resolution.
+3. If the payment shows Reconciliation required, compare the amount, merchant reference and provider transaction ID with the merchant portal. Escalate contradictory captures through the approved provider procedure and preserve the audit history.
 
-## Investigation and recovery
+## Investigate an unconfirmed refund
 
-1. Record time and response request ID; locate the matching `request.completed` event.
-2. Check status, route and duration. Do not paste raw credentials, token URLs or bodies into tickets.
-3. Check DB/Redis container health and `/readyz/`. Restore connectivity before restarting workers.
-4. Inspect unpublished OutboxEvent count, oldest creation time, attempts and next retry. Supervise/restart the worker; pending events survive application restarts. Published channel messages are not a client acknowledgement.
-5. For payment incidents, compare tenant-scoped transaction/provider references with the provider dashboard. Never manually claim settlement from an unverified callback.
-6. Rotate exposed station/provider credentials, revoke affected access, preserve audit history and record impact. Encryption-key rotation needs a deliberate decrypt/re-encrypt procedure.
+1. Check the original capture and refund reference in the approved provider dashboard and in Veyra's refund history.
+2. Use the verification action or let the refund worker recheck status. A pending result retains the reservation.
+3. Only retry through the supported owner action. It reuses the existing merchant refund key within the supported retry window.
+4. Resolve balance and receipt differences after confirmed evidence. Operational order cancellation is a separate action.
 
-## Backup and restore
-
-Use PostgreSQL custom-format dumps, encrypted off-site storage and protected key backups. Example: `pg_dump --format=custom --file=veyra.dump "$DATABASE_URL"`. Restore into an explicitly named isolated recovery database using `pg_restore --dbname=<recovery-database> veyra.dump`; verify tenant data, migrations and transactional workflows there before any production recovery. No restore drill, RPO/RTO, production retention or failover evidence exists yet. Never point a recovery command at the current development or production database casually.
-
-## Platform subscription billing
-
-Publish monthly whole-IDR plans in the platform admin before enabling checkout. Provide a dedicated Veyra Midtrans environment and server key through VEYRA_BILLING_MIDTRANS_ENV and VEYRA_BILLING_MIDTRANS_SERVER_KEY. Set VEYRA_BILLING_PUBLIC_ORIGIN to the public HTTPS origin. Configure the platform merchant's notification URL to /api/billing/notifications/midtrans/. Keep the platform merchant separate from tenant QRIS credentials.
-
-Run python manage.py process_billing as a supervised worker alongside process_outbox, or schedule python manage.py process_billing --once at least once per minute. The first advances subscription boundaries and reconciles payment status. The second publishes post-commit owner updates. Without a running billing worker, renewal invoices and provider status reconciliation are delayed even though time-based entitlement checks still apply.
-
-Review payment and subscription audit events in Django admin for failed, late, or conflicting transactions. Live merchant credentials, notification delivery and provider settlement need sandbox and production acceptance. Refunds and chargebacks require platform review and reconciliation.
+[Payment and refund lifecycle](PAYMENTS.md) · [Security and recovery](SECURITY.md)

@@ -3,6 +3,7 @@ import json
 import time
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree
 
 import pyotp
 from asgiref.sync import sync_to_async
@@ -24,6 +25,27 @@ class MFAWorkflowTests(TestCase):
         cache.clear()
         self.user = User.objects.create_user("mfa@example.com", "Long-Password-For-MFA-8842!")
         self.client.force_login(self.user)
+
+    def test_setup_qr_is_private_and_valid_for_the_enrolling_session(self):
+        qr_path = "/account/mfa/qr.svg"
+        self.assertEqual(Client().get(qr_path).status_code, 302)
+        self.assertEqual(self.client.get(qr_path).status_code, 404)
+        self.client.post(
+            "/account/security/",
+            {"action": "begin", "password": "Long-Password-For-MFA-8842!"},
+        )
+
+        other_session = Client()
+        other_session.force_login(self.user)
+        self.assertEqual(other_session.get(qr_path).status_code, 404)
+
+        image = self.client.get(qr_path)
+        self.assertEqual(image.status_code, 200)
+        self.assertEqual(image["Content-Type"], "image/svg+xml")
+        self.assertIn("no-store", image["Cache-Control"])
+        svg = ElementTree.fromstring(image.content)
+        self.assertEqual(svg.tag, "{http://www.w3.org/2000/svg}svg")
+        self.assertIsNotNone(svg.find("{http://www.w3.org/2000/svg}path"))
 
     def test_enrollment_login_challenge_and_single_use_recovery(self):
         response = self.client.post(

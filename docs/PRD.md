@@ -1,5 +1,7 @@
 # Veyra product requirements
 
+These requirements describe intended product behavior. Dated implementation notes below are historical. For the current state and evidence, see [feature status](FEATURE-STATUS.md) and [release history](RELEASE-HISTORY.md).
+
 ## Identity implementation update — 2026-11-17
 
 Google authorization-code OIDC now uses Authlib state, nonce, S256 PKCE and signed-token validation before subject binding. Existing email matches require explicit authenticated linking. Live Google consent is unverified without credentials.
@@ -8,7 +10,7 @@ Authenticator enrollment requires password confirmation or recent Google authent
 
 The new account-security interface uses shared ivory/espresso tokens, section navigation, progressive disclosure and native keyboard controls. Browser checks covered MFA errors/success, desktop/phone/tablet layouts and 48px inputs. Passkeys, assisted total-loss recovery, session inventory and Google disconnection remain missing. These changes are implemented and locally tested, not production-verified.
 
-Updated 2026-11-17. Product: Veyra. Tagline: Everything in sync.
+The identity note above was recorded on 2026-11-17. Veyra's tagline is **Everything in sync.**
 
 ## Vision and users
 
@@ -54,7 +56,7 @@ Preserve Django modular monolith, PostgreSQL, Redis, Channels, ASGI/Uvicorn and 
 
 ## Dependencies and limitations
 
-Provider merchant accounts, Google OAuth credentials, SMTP, printer hardware and production hosting/monitoring are external dependencies. Live Google OAuth acceptance, assisted factor recovery, production billing acceptance and other gaps in FEATURE-STATUS remain implementation work; credentials alone do not complete them. Current passing tests establish specific behavior, not overall product acceptance.
+Provider merchant accounts, Google OAuth credentials, SMTP, printer hardware and production hosting/monitoring are external dependencies. Hosted Google consent and billing require external acceptance. Assisted factor recovery requires an implementation. [Current work and acceptance gates](FEATURE-STATUS.md) Current passing tests establish specific behavior, not overall product acceptance.
 
 ## Figma design and application acceptance
 
@@ -152,3 +154,24 @@ Paid plans use monthly whole-IDR prices and can be published by authorized platf
 Plan changes and cancellation take effect at period end. A change applies after payment of the next invoice. Owners can resume renewal before the paid period ends. Unpaid renewals have seven days of operational grace and may restore access when settled within the invoice period. Expansion limits count active locations, employees, operational stations and catalog items. Existing records are preserved even when usage exceeds a new limit.
 
 Hosted checkout uses Veyra's own platform Midtrans credentials. Verified provider status posts the invoice and activates its saved terms. Runtime scheduling advances trials, renewals, grace periods, cancellation and reconciliation without page visits. The current scope is monthly, manual-payment renewal with no automatic debit, immediate cancellation, proration, tax accounting, or email reminders.
+
+## Public landing and account experience
+
+The landing page introduces Veyra with a browser capture of the working POS and follows restaurant operations from order intake to station handoff and settlement. Product, Operations and Product tour links lead to their corresponding sections. Registration and signed-in entry lead to existing account routes. Product captures use an isolated sample catalog. The desktop tour scrubs with GSAP and ScrollTrigger. Compact screens, reduced-motion preferences and Data Saver keep the content usable through static images and chapters.
+
+Sign-in, registration, password recovery, verification, invitation and authenticator challenge use a shared account layout. Forms use a separate column on wide screens and stack after the explanation on phones. Status pages give the result and the next action. Local return destinations survive navigation between sign-in and registration. Account security separates enrollment, one-time recovery codes and account connections. The enrollment QR must render in the session that started setup and carry private, no-store headers.
+
+## Shared form and data presentation
+
+Management and operational screens use the existing Soft Premium tokens for native controls, focus, errors and data tables. Relationship choices show business names for records and submit the original scoped identifiers. Short selections and permissions use native inputs. Longer product, category and location selections may use the searchable picker, with native selects available without JavaScript. Permissions and capabilities use plain-language labels for both the editor and saved display.
+
+Media fields share a native file action, preview and feedback while server-side normalization remains authoritative. Payment settings show the fields for the selected provider, mask secrets, and keep the existing encrypted save flow. Browser error pages show the HTTP result and a safe way back. Data tables keep semantic headings, numeric alignment and labeled keyboard-scrollable regions.
+
+## Pre-deployment acceptance — payments, inventory and ordering media
+
+- Owners can independently add, replace or remove the restaurant logo next to the ordering-page name. Guest menu and cart continue to use the signed storefront and receive changes through Channels.
+- Permanent offers bypass calendar dates. Previously saved dates are retained for later editing. Weekday and recurring time controls continue to apply independently.
+- A refund is a separate record tied to the original capture. Owners can record cash already returned or a card-terminal refund reference. Midtrans QRIS requests remain reserved until authoritative provider evidence confirms or denies the matching refund. Confirmed totals are visible on payment history, receipt controls and guest tracking. Manual card records document a completed terminal action. Refunds and operational cancellation preserve voucher redemption.
+- Paid order cancellation changes fulfillment and inventory. It never initiates a refund. Pending Midtrans QRIS must have a verified terminal cancellation, denial or expiry before staff can cancel the order. Other pending QRIS attempts require provider confirmation. Whole-rupiah amounts are required for Midtrans QRIS.
+- An inventory manager reconciles the quantity at an authorized location by recording the expected amount, physical amount and reason. A nonzero variance appends a movement. Supplier returns record hand-back after delivery at the original receiving location and original purchase cost. They do not reopen the purchase or issue a supplier credit.
+- Current stock cost estimates equal current quantity multiplied by the last accepted unit cost. Historical receipt and supplier return costs retain their original amounts. Accounting valuation requires a separate costing and reconciliation policy.

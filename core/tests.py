@@ -557,6 +557,8 @@ class TenantAndOrderTests(TestCase):
         self.assertEqual(card_order.tender.change_due, Decimal("0.00"))
 
     def test_unpaid_qris_table_order_cannot_enter_preparation(self):
+        self.product.price = Decimal("25000.00")
+        self.product.save(update_fields=["price"])
         location = self.business.locations.get(name="Main location")
         table = DiningTable.objects.create(
             business=self.business, location=location, name="T9"
@@ -579,9 +581,21 @@ class TenantAndOrderTests(TestCase):
                 actor=self.owner,
             )
 
+    def test_fractional_midtrans_order_is_rejected_before_creating_payment(self):
+        self.product.price = Decimal("25000.50")
+        self.product.save(update_fields=["price"])
+        with self.assertRaisesRegex(ValueError, "Choose counter payment"):
+            create_order(
+                business=self.business, actor=self.owner, items=[(self.product.pk, 1)],
+                payment_method=Order.PaymentMethod.QRIS, payment_provider=PaymentConnection.Provider.MIDTRANS,
+            )
+        self.assertEqual(self.business.orders.count(), 0)
+
     @override_settings(PAYMENT_CREDENTIALS_ENCRYPTION_KEY=Fernet.generate_key().decode())
     @patch("urllib.request.urlopen")
     def test_guest_qris_checkout_tracks_payment_and_reuses_pending_transaction(self, mock_urlopen):
+        self.product.price = Decimal("25000.00")
+        self.product.save(update_fields=["price"])
         connection = save_payment_connection(
             business=self.business,
             actor=self.owner,
@@ -1000,6 +1014,37 @@ class PromotionPricingTests(TestCase):
 
 
 class GuestOrderRealtimeTests(TransactionTestCase):
+    def test_open_order_stream_closes_after_membership_revocation(self):
+        from django.conf import settings
+
+        from config.asgi import application
+
+        owner = User.objects.create_user("stream-owner@example.invalid")
+        cashier = User.objects.create_user("revoked-cashier@example.invalid")
+        business = create_business(owner=owner, name="Order stream", slug="orders-live")
+        member = Membership.objects.create(user=cashier, business=business, permissions=["orders.view"])
+        browser = Client()
+        browser.force_login(cashier)
+        session = browser.cookies[settings.SESSION_COOKIE_NAME].value
+        communicator = WebsocketCommunicator(application, f"/ws/business/{business.slug}/orders/", headers=[
+            (b"host", b"localhost"), (b"origin", b"http://localhost"),
+            (b"cookie", f"{settings.SESSION_COOKIE_NAME}={session}".encode()),
+        ])
+        product = Product.objects.create(business=business, name="Tea", price="5.00")
+
+        async def exercise():
+            self.assertTrue((await communicator.connect())[0])
+            await Membership.objects.filter(pk=member.pk).aupdate(active=False)
+            order = await sync_to_async(create_order)(business=business, actor=owner, items=[(product.pk, 1)])
+            event = await OutboxEvent.objects.aget(business=business, payload__order_id=str(order.pk), event_type="order.update")
+            self.assertTrue(await sync_to_async(dispatch_outbox_event)(event.pk))
+            message = await communicator.receive_output(timeout=5)
+            self.assertEqual(message["type"], "websocket.close")
+            self.assertEqual(message["code"], 4403)
+            await communicator.disconnect()
+
+        asyncio.run(exercise())
+
     def test_cashier_payment_http_workflow_updates_live_order_stream(self):
         from django.conf import settings
 
@@ -1907,15 +1952,16 @@ class PaymentIntegrationAndWebhookTests(TestCase):
             credentials={"server_key": self.server_key},
         )
 
-    def test_verify_payment_connection_checks_format(self):
+    def test_credential_format_alone_does_not_enable_payment(self):
         valid, msg = verify_payment_connection(
             business=self.business,
             connection_id=self.connection.pk,
             actor=self.owner,
         )
-        self.assertTrue(valid)
+        self.assertFalse(valid)
         self.connection.refresh_from_db()
-        self.assertIsNotNone(self.connection.verified_at)
+        self.assertIsNone(self.connection.verified_at)
+        self.assertEqual(self.connection.verification_state, PaymentConnection.Verification.INCOMPLETE)
 
     @patch("urllib.request.urlopen")
     def test_initiate_midtrans_qris_and_after_paid_release(self, mock_urlopen):
@@ -1969,6 +2015,7 @@ class PaymentIntegrationAndWebhookTests(TestCase):
             "signature_key": sig_key,
         }
         body_bytes = json.dumps(webhook_payload).encode()
+        resp_mock.read.return_value = json.dumps({**webhook_payload, "payment_type": "qris"}).encode()
 
         res = self.client.post(
             "/api/payments/webhooks/midtrans/",

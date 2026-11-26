@@ -9,6 +9,7 @@
   <p data-billing-connection class="sr-only" role="status"></p>
   <div class="form-stack billing-layout" data-billing-state>
   {% if subscription %}
+  <div class="billing-overview">
   <section class="form-card">
     <div class="billing-heading"><div><h2>{% if term %}{{ term.name }}{% else %}{{ subscription.plan.name }}{% endif %}</h2><span class="status-badge">{{ label }}</span></div>
       {% if term.interval == 'month' %}<p><strong>Rp {{ term.monthly_price|floatformat:"0g" }}</strong> per month</p>{% endif %}</div>
@@ -30,6 +31,7 @@
   <section class="form-card">
     <h2>Usage</h2><dl class="billing-usage">{% for name, used, limit in usage %}<div><dt>{{ name }}</dt><dd>{{ used }}{% if limit is not None %} of {{ limit }}{% else %} used{% endif %}</dd></div>{% endfor %}</dl>
   </section>
+  </div>
   <section class="form-card">
   {% if confirm_plan %}
     <h2>Confirm {{ confirm_plan.name }}</h2><p>Rp {{ confirm_plan.monthly_price|floatformat:"0g" }} per month.</p>
@@ -51,8 +53,8 @@
   <section class="form-card">
     <h2>Invoices and payments</h2>
     {% if invoices %}<div class="report-table" tabindex="0" role="region" aria-label="Invoices">
-      <table><thead><tr><th scope="col">Invoice</th><th scope="col">Issued</th><th scope="col">Plan</th><th scope="col">Total</th><th scope="col">Status</th></tr></thead><tbody>
-      {% for invoice in invoices %}<tr><td><a href="{% url 'billing_invoice' business.slug invoice.pk %}">{{ invoice.reference }}</a></td><td>{{ invoice.issued_at|date:"d M Y" }}</td><td>{{ invoice.terms.name }}</td><td>Rp {{ invoice.total|floatformat:"0g" }}</td><td>{{ invoice.get_status_display }}</td></tr>{% endfor %}
+      <table><thead><tr><th scope="col">Invoice</th><th scope="col">Issued</th><th scope="col">Plan</th><th scope="col" class="numeric">Total</th><th scope="col">Status</th></tr></thead><tbody>
+      {% for invoice in invoices %}<tr><td><a href="{% url 'billing_invoice' business.slug invoice.pk %}">{{ invoice.reference }}</a></td><td>{{ invoice.issued_at|date:"d M Y" }}</td><td>{{ invoice.terms.name }}</td><td class="numeric">Rp {{ invoice.total|floatformat:"0g" }}</td><td><span class="status-badge">{{ invoice.get_status_display }}</span></td></tr>{% endfor %}
       </tbody></table></div>{% include "core/pagination.html" with page_obj=invoices %}{% else %}<p>No invoices yet.</p>{% endif %}
   </section>
   {% else %}<p class="inline-empty">There is no subscription record for this business. Contact platform support.</p>{% endif %}

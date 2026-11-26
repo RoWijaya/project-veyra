@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+{% block title %}Return to supplier · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'purchase_detail' business.slug purchase.pk %}">{{ purchase.reference }}</a><span>/</span>Supplier return</div>
+  <div class="app-heading"><div><h1>Return to supplier</h1><p>{{ line.item_name }} · {{ purchase.supplier_name }} · {{ purchase.location_name }}</p></div></div>
+  <section class="form-card">
+    <p>Accepted quantity remaining for return <strong>{{ returnable|floatformat:"-3" }} {{ line.unit }}</strong></p>
+    <p class="field-hint">Record this after handing the items back to the supplier. The return reduces stock at {{ purchase.location_name }}.</p>
+    {% if form.non_field_errors or form.idempotency_key.errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}{{ form.idempotency_key.errors }}</div>{% endif %}
+    {% if can_return %}<form method="post" class="form-stack">
+      {% csrf_token %}{{ form.idempotency_key }}
+      {% for field in form.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
+      <div class="management-actions"><button class="button button-dark">Record supplier return</button><a class="button button-light" href="{% url 'purchase_detail' business.slug purchase.pk %}">Back to purchase</a></div>
+    </form>{% else %}<p class="inline-empty">A return requires an active receiving location and accepted items that have not already been returned.</p>{% endif %}
+  </section>
+</section>
+{% endblock %}

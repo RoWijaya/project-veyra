@@ -61,6 +61,51 @@ class PurchaseFixture:
 
 
 class PurchasingTests(PurchaseFixture, TestCase):
+    def test_count_reconciles_once_and_rejects_stale_counts(self):
+        self.make_purchase()
+        self.change_state("submit")
+        self.client.post(self.receive, self.delivery(first="8"))
+        balance = self.assert_quantity(self.beans, "8")
+        url = self.root + f"balances/{balance.pk}/count/"
+        self.assertContains(self.client.get(url), "Physical stock count")
+        data = {"expected": "8", "counted": "6.250", "reason": "Closing count", "idempotency_key": uuid4()}
+        self.assertRedirects(self.client.post(url, data), url)
+        self.assertRedirects(self.client.post(url, data), url)
+        self.assertContains(self.client.post(url, {**data, "idempotency_key": uuid4()}),
+                            "Stock changed", status_code=409)
+        self.assertContains(self.client.post(url, {**data, "counted": "4"}),
+                            "already used", status_code=409)
+        balance = self.assert_quantity(self.beans, "6.250")
+        self.assertEqual(balance.physical_counts.count(), 1)
+        count = balance.physical_counts.get()
+        self.assertEqual(count.movement.quantity_delta, Decimal("-1.750"))
+        self.assertRedirects(self.client.post(url, {
+            **data, "expected": "6.250", "idempotency_key": uuid4(),
+        }), url)
+        self.assertIsNone(balance.physical_counts.first().movement)
+        self.assertContains(self.client.get(url), "Closing count")
+
+    def test_supplier_return_preserves_receipts_and_rejects_excess(self):
+        self.make_purchase()
+        self.change_state("submit")
+        self.client.post(self.receive, self.delivery(first="8", damaged="2"))
+        url = self.detail + f"lines/{self.first.pk}/return/"
+        self.assertContains(self.client.get(url), "Return to supplier")
+        data = {"quantity": "3", "reason": "Damaged after inspection", "idempotency_key": uuid4()}
+        self.assertRedirects(self.client.post(url, data), self.detail)
+        self.assertRedirects(self.client.post(url, data), self.detail)
+        self.assertContains(self.client.post(url, {**data, "quantity": "2"}),
+                            "already used", status_code=409)
+        self.assertContains(self.client.post(url, {**data, "quantity": "6", "idempotency_key": uuid4()}),
+                            "accepted quantity", status_code=409)
+        self.assert_quantity(self.beans, "5")
+        self.first.refresh_from_db()
+        self.assertEqual(self.first.received_quantity, Decimal("8"))
+        returned = self.first.supplier_returns.get()
+        self.assertEqual(returned.movement.quantity_delta, Decimal("-3"))
+        self.assertEqual(returned.unit_cost, Decimal("17.25"))
+        self.assertContains(self.client.get(self.detail), returned.reference)
+
     def test_create_edit_search_and_deactivate_supplier(self):
         created = self.client.post(self.root + "suppliers/new/", self.supplier_data)
         self.assertEqual(created.status_code, 302)
@@ -203,6 +248,34 @@ class PurchasingConcurrencyTests(PurchaseFixture, TransactionTestCase):
             self.assertEqual(sorted(f.result(timeout=20) for f in futures), [302, 400])
         self.assert_quantity(self.beans, "15")
         self.assertEqual(self.purchase.receipts.count(), 1)
+
+    def test_concurrent_counts_apply_one_variance(self):
+        self.make_purchase()
+        self.change_state("submit")
+        self.client.post(self.receive, self.delivery(first="8"))
+        balance = self.assert_quantity(self.beans, "8")
+        url = self.root + f"balances/{balance.pk}/count/"
+        gate = Barrier(2, timeout=10)
+
+        def count(quantity):
+            close_old_connections()
+            try:
+                client = Client()
+                client.force_login(self.owner)
+                gate.wait()
+                return client.post(url, {
+                    "expected": "8", "counted": quantity, "reason": "Recount", "idempotency_key": uuid4(),
+                }).status_code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(count, quantity) for quantity in ("7", "6")]
+            self.assertEqual(sorted(f.result(timeout=20) for f in futures), [302, 409])
+        balance.refresh_from_db()
+        count = balance.physical_counts.get()
+        self.assertEqual(balance.quantity, count.counted)
+        self.assertEqual(count.movement.quantity_delta, count.variance)
 
     def test_outbox_updates_authorized_purchase_and_stock_sockets(self):
         from config.asgi import application

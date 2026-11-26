@@ -1,10 +1,23 @@
 {% extends "core/customer_base.html" %}
 {% block content %}
-{% include "core/store_location.html" %}
+{% if location %}{% if is_preview %}<p class="store-location">{{ location.name }}</p>{% else %}{% include "core/store_location.html" %}{% endif %}{% endif %}
+{% if preview_form.errors %}
+  <div class="form-error" role="alert" data-preview-invalid><strong>Preview uses the saved draft until these settings are corrected.</strong>
+    <ul data-preview-errors>{% for field in preview_form %}{% for issue in field.errors %}<li><strong>{{ field.label }}.</strong> {{ issue }}</li>{% endfor %}{% endfor %}{% for issue in preview_form.non_field_errors %}<li>{{ issue }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
 <div id="store-intro">
   <h1>Our menu</h1>
-  {% if ordering_page.introduction %}<p class="store-introduction">{{ ordering_page.introduction }}</p>{% endif %}
-  {% if ordering_page.has_banner %}<img class="store-page-banner" src="{% url 'guest_ordering_banner' table_token %}?v={{ ordering_page.updated_at|date:'U.u' }}" alt="{{ ordering_page.banner_alt }}" width="1024" height="340" data-media-image>{% endif %}
+  {% if ordering_design.tagline %}<p class="store-tagline">{{ ordering_design.tagline }}</p>{% endif %}
+  {% if ordering_design.introduction %}<p class="store-introduction">{{ ordering_design.introduction }}</p>{% endif %}
+  {% if ordering_page.has_banner or ordering_banner_url or ordering_design.banner_title or ordering_design.banner_description %}
+  <section class="store-cover" data-caption="{{ ordering_design.caption }}"{% if ordering_page.has_banner or ordering_banner_url %} data-cover-image{% endif %} aria-label="Restaurant cover">
+    {% if ordering_banner_url or ordering_page.has_banner %}<img class="store-page-banner" src="{% if ordering_banner_url %}{{ ordering_banner_url }}{% else %}{% url 'guest_ordering_banner' table_token %}?v={{ ordering_asset_version|date:'U.u' }}{% endif %}" alt="{{ ordering_design.banner_alt }}" width="1024" height="340" data-media-image>{% endif %}
+    {% if ordering_design.banner_title or ordering_design.banner_description %}<div class="store-cover-caption">
+      {% if ordering_design.banner_title %}<h2>{{ ordering_design.banner_title }}</h2>{% endif %}
+      {% if ordering_design.banner_description %}<p>{{ ordering_design.banner_description }}</p>{% endif %}
+    </div>{% endif %}
+  </section>{% endif %}
 </div>
 <section class="store-banners" id="store-banners" aria-label="Featured promotions">
   {% for banner in banners %}<article class="store-banner">
@@ -22,21 +35,21 @@
 <p class="sr-only" data-menu-count role="status"></p>
 <section id="menu-products" aria-label="Menu products">
   <div class="store-products" id="store-products">
-  {% for product in products %}<article class="store-product" id="product-{{ product.pk }}" data-menu-product="{{ product.pk }}" data-name="{{ product.name }}" data-category="{% if product.category.active %}{{ product.category_id }}{% endif %}" data-promotions="{% for promotion in product.price_quote.promotions %}{{ promotion.id }} {% endfor %}">
-    {% if product.image %}<img class="store-product-image" src="{% url 'guest_product_image' table_token product.pk %}?v={{ product.image.updated_at|date:'U.u' }}" alt="{{ product.image.alt_text }}" width="400" height="300" loading="lazy" data-media-image>{% endif %}
-    <div class="store-product-copy"><div class="store-product-heading"><h2>{{ product.name }}</h2>
+  {% for product in menu_products %}<article class="store-product" id="product-{{ product.pk }}" data-menu-product="{{ product.pk }}" data-name="{{ product.name }}" data-category="{% if product.category.active %}{{ product.category_id }}{% endif %}" data-promotions="{% for promotion in product.price_quote.promotions %}{{ promotion.id }} {% endfor %}">
+    {% if ordering_design.show_images and product.image %}<img class="store-product-image" src="{% if is_preview %}{% url 'ordering_preview_product_image' business.slug product.pk %}{% else %}{% url 'guest_product_image' table_token product.pk %}{% endif %}?v={{ product.image.updated_at|date:'U.u' }}" alt="{{ product.image.alt_text }}" width="400" height="300" loading="lazy" data-media-image>{% endif %}
+    <div class="store-product-copy">{% if product.menu_featured %}<p class="store-featured">Featured</p>{% endif %}<div class="store-product-heading"><h2>{{ product.name }}</h2>
       <p class="store-price">{% if product.price_quote.promotions %}<s>Rp {{ product.price|floatformat:0 }}</s> {% endif %}<strong>Rp {{ product.display_price|floatformat:0 }}</strong></p></div>{% if product.category.active %}<p class="field-hint">{{ product.category.name }}</p>{% endif %}
-      {% if product.description %}<p class="store-product-description">{{ product.description }}</p>{% endif %}
+      {% if ordering_design.show_descriptions and product.description %}<p class="store-product-description">{{ product.description }}</p>{% endif %}
       {% if product.price_quote.promotions %}<p class="store-promotion">{% for promotion in product.price_quote.promotions %}{{ promotion.name }}{% if not forloop.last %} · {% endif %}{% endfor %}</p>{% endif %}
       <details class="store-product-detail"><summary class="button button-light">View product</summary>
-        <form method="post" action="{{ cart_url }}" data-cart-add data-configurable-item>{% csrf_token %}<input type="hidden" name="action" value="add"><input type="hidden" name="product" value="{{ product.pk }}"><input type="hidden" name="revision" value="{{ cart.revision }}">
+        {% if is_preview %}<fieldset class="store-preview-options" disabled><legend class="sr-only">Ordering is disabled in preview</legend>{% else %}<form method="post" action="{{ cart_url }}" data-cart-add data-configurable-item>{% csrf_token %}<input type="hidden" name="action" value="add"><input type="hidden" name="product" value="{{ product.pk }}"><input type="hidden" name="revision" value="{{ cart.revision }}">{% endif %}
           {% if product.order_modifier_groups %}
           {% include "core/modifier_choices.html" with groups=product.order_modifier_groups option_name="modifiers" %}
           <p class="modifier-price" aria-live="polite">Item price <strong data-modifier-price data-base-price="{{ product.display_price|floatformat:'2u' }}">Rp {{ product.display_price|floatformat:0 }}</strong></p>
           {% endif %}
           {% include "core/quantity_input.html" with minimum=1 input_name="quantity" %}
-          <button class="button button-dark"{% if not subscription_allows_orders %} disabled{% endif %}>Add to order</button>
-        </form>
+          <button class="button button-dark"{% if is_preview or not subscription_allows_orders %} disabled{% endif %}>Add to order</button>
+        {% if is_preview %}</fieldset>{% else %}</form>{% endif %}
       </details>
     </div>
   </article>{% empty %}<p class="inline-empty">The menu is not available right now. Please ask the team for help.</p>{% endfor %}
@@ -44,5 +57,18 @@
   <p class="inline-empty" data-menu-empty hidden>No products match. Try another name or category.</p>
 </section>
 <p data-cart-feedback role="status"></p>
-<a class="button button-dark store-order-link" href="{{ cart_url }}">Review your order · <span data-cart-count>{{ cart_count }}</span></a>
+{% if not is_preview %}<a class="button button-dark store-order-link" href="{{ cart_url }}">Review your order · <span data-cart-count>{{ cart_count }}</span></a>{% endif %}
+<section id="store-information"{% if not ordering_design.show_information %} hidden{% endif %} class="store-information" aria-labelledby="store-information-title">
+  {% if ordering_design.show_information %}
+  <h2 id="store-information-title">Restaurant information</h2>
+  {% if ordering_design.address %}<p>{{ ordering_design.address }}</p>{% endif %}
+  {% if ordering_design.opening_note %}<p>{{ ordering_design.opening_note }}</p>{% endif %}
+  {% if ordering_design.phone %}<p><a href="tel:{{ ordering_design.phone|cut:' '|cut:'('|cut:')' }}">{{ ordering_design.phone }}</a></p>{% endif %}
+  {% if ordering_design.website or ordering_design.instagram or ordering_design.facebook %}<ul>
+    {% if ordering_design.website %}<li><a href="{{ ordering_design.website }}" rel="noopener noreferrer">Website</a></li>{% endif %}
+    {% if ordering_design.instagram %}<li><a href="{{ ordering_design.instagram }}" rel="noopener noreferrer">Instagram</a></li>{% endif %}
+    {% if ordering_design.facebook %}<li><a href="{{ ordering_design.facebook }}" rel="noopener noreferrer">Facebook</a></li>{% endif %}
+  </ul>{% endif %}
+  {% endif %}
+</section>
 {% endblock %}

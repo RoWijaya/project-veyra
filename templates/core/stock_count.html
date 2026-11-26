@@ -1,0 +1,36 @@
+{% extends "core/base.html" %}
+{% block title %}Physical stock count · {{ business.name }} — Veyra{% endblock %}
+{% block content %}
+<section class="app-page">
+  <div class="crumb"><a href="{% url 'inventory' business.slug %}">Inventory</a><span>/</span>Stock count</div>
+  <div class="app-heading"><div><h1>Physical stock count</h1><p>{{ balance.item.name }} · {{ balance.location.name }}</p></div></div>
+  <div class="form-stack">
+  <section class="form-card">
+    <h2>Expected stock</h2>
+    <p class="stock-expected"><strong>{{ balance.quantity|floatformat:"-3" }}</strong> {{ balance.item.unit }}</p>
+    {% if can_count %}
+    <form method="post" class="form-stack">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+      {% for field in form.hidden_fields %}{{ field }}{% if field.errors %}<div class="form-error" role="alert">{{ field.errors }}</div>{% endif %}{% endfor %}
+      <p class="field-hint">Confirming this count records any difference in the stock ledger.</p>
+      {% for field in form.visible_fields %}{% include "core/purchasing_field.html" %}{% endfor %}
+      <div class="management-actions"><button class="button button-dark">Reconcile count</button>
+        {% if form.non_field_errors %}<a class="button button-light" href="{% url 'stock_count' business.slug balance.pk %}">Start a fresh count</a>{% endif %}
+      </div>
+    </form>
+    {% endif %}
+  </section>
+  <section class="form-card">
+    <h2>Count history</h2>
+    {% if page_obj %}
+    <div class="report-table" tabindex="0" role="region" aria-label="Reconciled physical counts">
+      <table><thead><tr><th scope="col">Recorded</th><th scope="col" class="numeric">Expected</th><th scope="col" class="numeric">Counted</th><th scope="col" class="numeric">Variance</th><th scope="col">Reason</th><th scope="col">Reconciled by</th></tr></thead>
+      <tbody>{% for count in page_obj %}<tr><td>{{ count.created_at|date:"d M Y H:i" }}</td><td class="numeric">{{ count.expected|floatformat:"-3" }}</td><td class="numeric">{{ count.counted|floatformat:"-3" }}</td><td class="numeric">{{ count.variance|floatformat:"-3" }}</td><td>{{ count.reason }}</td><td>{{ count.actor.get_full_name|default:count.actor.email }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+    {% include "core/pagination.html" %}
+    {% else %}<p>No physical counts recorded.</p>{% endif %}
+  </section>
+  </div>
+</section>
+{% endblock %}

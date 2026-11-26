@@ -1,16 +1,17 @@
 from zoneinfo import ZoneInfo
 
 from django import forms
+from django.core.exceptions import PermissionDenied
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, F, Q
-from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from .page_errors import access_restricted
 from .models import AuditEvent, Business, OutboxEvent, Voucher
 from .pricing import VoucherError, normalize_voucher_code
 from .services import require_business_feature
@@ -81,12 +82,12 @@ def vouchers(request, slug, voucher_id=None):
 
     membership = membership_for(request, slug)
     business = membership.business
-    if not membership.allows("catalog.manage"):
-        return HttpResponseForbidden("You cannot manage vouchers for this business.")
+    if not membership.allows("catalog.manage") or membership.location_restricted:
+        raise PermissionDenied
     try:
         require_business_feature(business, "promotions")
     except PermissionError as error:
-        return HttpResponseForbidden(str(error))
+        return access_restricted(request, str(error))
 
     queryset = business.vouchers.annotate(used=Count("redemptions"))
     now = timezone.now()

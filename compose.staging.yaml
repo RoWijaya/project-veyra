@@ -1,0 +1,106 @@
+x-runtime: &runtime
+  image: ${VEYRA_STAGE_IMAGE:?Choose the reviewed application image}
+  env_file: ${VEYRA_STAGE_ENV_FILE:?Pass the staging environment file}
+  environment:
+    DJANGO_DEBUG: "false"
+    DJANGO_SQLITE_TEST: "false"
+    REDIS_URL: redis://redis:6379/0
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 45s
+  networks: [default, dependencies]
+
+x-running: &running
+  migrate:
+    condition: service_completed_successfully
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+x-worker-health: &worker-health
+  interval: 30s
+  timeout: 18s
+  retries: 3
+  start_period: 25s
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    environment:
+      POSTGRES_DB: veyra_staging
+      POSTGRES_USER: veyra
+      POSTGRES_PASSWORD: ${VEYRA_STAGE_POSTGRES_PASSWORD:?Set a staging-only password}
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [dependencies]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veyra -d veyra_staging"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    networks: [dependencies]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *runtime
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    restart: "no"
+    networks: [dependencies]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  web:
+    <<: *runtime
+    depends_on: *running
+    ports: ["127.0.0.1:${VEYRA_STAGE_PORT:-8010}:8000"]
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_staging_web"]
+      <<: *worker-health
+
+  outbox:
+    <<: *runtime
+    command: ["python", "manage.py", "process_outbox"]
+    depends_on: *running
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_worker", "outbox"]
+      <<: *worker-health
+
+  account_mail:
+    <<: *runtime
+    command: ["python", "manage.py", "process_account_mail"]
+    depends_on: *running
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_worker", "account_mail"]
+      <<: *worker-health
+
+  billing:
+    <<: *runtime
+    command: ["python", "manage.py", "process_billing"]
+    depends_on: *running
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_worker", "billing"]
+      <<: *worker-health
+
+  refunds:
+    <<: *runtime
+    command: ["python", "manage.py", "process_refunds"]
+    depends_on: *running
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_worker", "refunds"]
+      <<: *worker-health
+
+networks:
+  dependencies:
+    internal: true
+
+volumes:
+  postgres:

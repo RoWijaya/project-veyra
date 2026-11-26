@@ -44,7 +44,10 @@
   font: 500 .9375rem/1.4 var(--sans);
   border-color: var(--line-control);
 }
+.multi-picker-toggle [data-summary] { min-width: 0; overflow-wrap: anywhere; }
 .multi-picker-toggle[aria-expanded="true"] { border-color: var(--coffee); }
+.multi-picker-toggle[aria-invalid="true"] { border-color: var(--error-ink); }
+.multi-picker-chips:empty { display: none; }
 .multi-picker-toggle:disabled,
 .multi-picker-chip:disabled,
 .multi-picker-choice:disabled { color: var(--security-muted); cursor: default; }

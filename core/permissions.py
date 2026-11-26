@@ -1,10 +1,13 @@
 import hashlib
 import uuid
+from decimal import Decimal
 
 from django.core import signing
+from django.core.exceptions import ValidationError
+from django.db.models import Exists, OuterRef, Q, Sum
 from django.http import Http404
 
-from .models import Business, Membership, Order, PairedDevice
+from .models import Business, Membership, Order, OrderRefund, PairedDevice, PaymentTransaction
 from .storefront import resolve_storefront
 
 ORDER_TRACKING_MAX_AGE = 60 * 60 * 24
@@ -33,7 +36,7 @@ def guest_menu_business_id(token):
         return None
 
 
-def order_for_tracking_cookie(order_id, cookie_value):
+def order_for_tracking_cookie(order_id, cookie_value, *, with_refunds=False):
     if not cookie_value:
         return None
     try:
@@ -41,9 +44,46 @@ def order_for_tracking_cookie(order_id, cookie_value):
     except (signing.BadSignature, TypeError, ValueError):
         return None
     digest = hashlib.sha256(token.encode()).hexdigest()
-    return Order.objects.filter(
+    orders = Order.objects.filter(
         pk=order_id, source__in=Order.GUEST_SOURCES, guest_tracking_digest=digest
-    ).first()
+    )
+    if with_refunds:
+        orders = orders.annotate(
+            refunded_amount=Sum(
+                "refunds__amount", filter=Q(refunds__status=OrderRefund.Status.SUCCEEDED),
+                default=Decimal("0.00"),
+            ),
+            qris_needs_review=Exists(PaymentTransaction.objects.filter(
+                order=OuterRef("pk"), status=PaymentTransaction.Status.REVIEW,
+            )),
+        )
+    return orders.first()
+
+PERMISSION_CHOICES = (
+    ("catalog.view", "View catalog"),
+    ("catalog.manage", "Manage catalog"),
+    ("ordering_page.view", "View ordering page builder"),
+    ("ordering_page.edit", "Edit ordering page drafts"),
+    ("orders.view", "View orders"),
+    ("orders.create", "Create orders"),
+    ("orders.manage", "Manage order status"),
+    ("inventory.view", "View inventory"),
+    ("inventory.manage", "Manage inventory"),
+    ("locations.view", "View locations"),
+    ("locations.manage", "Manage locations"),
+    ("tables.view", "View tables and QR codes"),
+    ("tables.manage", "Manage tables and QR codes"),
+    ("customers.view", "View customers"),
+    ("customers.manage", "Manage customers"),
+    ("reports.view", "View reports"),
+    ("employees.view", "View team"),
+    ("employees.manage", "Manage team"),
+)
+
+INVITABLE_PERMISSIONS = frozenset(
+    code for code, _ in PERMISSION_CHOICES if code not in {"tables.view", "tables.manage"}
+)
+
 
 STATION_CAPABILITIES = (
     ("catalog.view", "View catalog"),
@@ -60,34 +100,51 @@ DEFAULT_STATION_CAPABILITIES = {
 }
 
 
-def order_stream_business_id(user_id, slug):
-    business = Business.objects.filter(slug=slug).first()
-    if not business:
-        return None
-    if business.owner_id == user_id:
-        return business.id.hex
-    membership = Membership.objects.filter(
-        user_id=user_id,
-        business=business,
-        active=True,
+def valid_location_key(value):
+    return (
+        isinstance(value, str) and value.isascii() and value.isdecimal()
+        and len(value) <= 19 and 0 < int(value) <= 2**63 - 1
+    )
+
+
+def stream_access(user_id, slug, permission):
+    member = Membership.objects.select_related("business").filter(
+        user_id=user_id, user__is_active=True, business__slug=slug, active=True,
     ).first()
-    if membership and membership.allows("orders.view"):
-        return business.id.hex
+    if not member:
+        business = Business.objects.filter(slug=slug, owner_id=user_id, owner__is_active=True).first()
+        if business is None:
+            return None
+        member = Membership(business=business, user_id=user_id, active=True)
+    if member.allows(permission) and (not member.location_restricted or member.allowed_locations().exists()):
+        return member
     return None
 
 
-def inventory_stream_business_id(user_id, slug, location_id=None):
-    business = Business.objects.filter(slug=slug).first()
-    if not business:
+def order_stream_business_id(user_id, slug):
+    member = stream_access(user_id, slug, "orders.view")
+    return member.business_id.hex if member else None
+
+
+def order_stream_snapshot(user_id, slug, order_id):
+    member = stream_access(user_id, slug, "orders.view")
+    if not member:
         return None
-    if business.owner_id == user_id:
-        return business.id.hex
-    membership = Membership.objects.filter(
-        user_id=user_id, business=business, active=True
-    ).first()
-    if membership and membership.allows("inventory.view"):
-        if location_id is None or membership.allowed_inventory_locations().filter(pk=location_id).exists():
-            return business.id.hex
+    try:
+        return member.scope_locations(member.business.orders).filter(pk=order_id).values(
+            "status", "payment_status", "payment_method",
+        ).first()
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
+def inventory_stream_business_id(user_id, slug, location_id=None):
+    member = stream_access(user_id, slug, "inventory.view")
+    if member and (
+        location_id is None
+        or (valid_location_key(location_id) and member.allowed_locations().filter(pk=location_id).exists())
+    ):
+        return member.business_id.hex
     return None
 
 

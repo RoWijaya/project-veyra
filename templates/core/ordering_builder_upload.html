@@ -1,0 +1,12 @@
+<fieldset class="catalog-media builder-upload" data-upload-field>
+  <legend>{% if kind == "logo" %}Restaurant logo{% else %}Menu banner{% endif %}</legend>
+  <p class="field-hint">JPEG, PNG or WebP up to 5 MB and 16 million pixels.{% if kind == "logo" %} A square image fits best.{% else %} A wide image crops best.{% endif %}</p>
+  {% if content %}<figure data-current-image>
+    <img class="media-preview ordering-{{ kind }}-preview" src="{% if kind == 'logo' %}{% url 'ordering_logo_image' business.slug %}{% else %}{% url 'ordering_banner_image' business.slug %}{% endif %}" alt="" data-media-image>
+    <figcaption class="field-hint">Current {{ kind }}</figcaption>
+  </figure>{% endif %}
+  <img class="media-preview ordering-{{ kind }}-preview" data-upload-preview alt="Selected {{ kind }} preview" hidden>
+  {% include "core/purchasing_field.html" with field=upload %}
+  {% if upload.data and form.errors and not upload.errors %}<p class="field-hint">Choose this image again before saving the corrected draft.</p>{% endif %}
+  {% if removal %}{% include "core/purchasing_field.html" with field=removal %}{% endif %}
+</fieldset>

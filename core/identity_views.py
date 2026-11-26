@@ -140,7 +140,7 @@ def authenticator_qr(request):
     if not factor or time.time() - request.session.get("mfa_setup_at", 0) > 600:
         return HttpResponse(status=404)
     secret = account_cipher().decrypt(factor.secret_ciphertext.encode()).decode()
-    uri = pyotp.TOTP(secret).provisioning_uri(request.user.email, issuer_name="Veyra")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=request.user.email, issuer_name="Veyra")
     output = io.BytesIO()
     qrcode.make(uri, image_factory=SvgPathImage).save(output)
     return HttpResponse(output.getvalue(), content_type="image/svg+xml")
@@ -173,15 +173,16 @@ def mfa_challenge(request):
 @never_cache
 @require_POST
 def google_start(request):
+    def unavailable(detail, status):
+        return render(request, "core/google_unavailable.html", {"detail": detail}, status=status)
+
     if not (
         settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REDIRECT_URI
     ):
-        return HttpResponse("Google sign-in is not configured. Use email and password.", status=503)
+        return unavailable("Google sign-in is unavailable here. Use email and password to continue.", 503)
     intent = request.POST.get("intent", "login")
     if intent == "link" and (not request.user.is_authenticated or not recent_primary(request)):
-        return HttpResponse(
-            "Sign in and confirm your current password before connecting Google.", status=403
-        )
+        return unavailable("Sign in again before connecting your Google account.", 403)
     if intent not in {"login", "link"}:
         return HttpResponse(status=400)
     request.session["google_intent"] = {
@@ -195,9 +196,7 @@ def google_start(request):
             request, settings.GOOGLE_REDIRECT_URI, prompt="select_account"
         )
     except (OAuthError, RequestException, ValueError):
-        return HttpResponse(
-            "Google is temporarily unavailable. Try again or use email sign-in.", status=503
-        )
+        return unavailable("Google is temporarily unavailable. Try again or sign in with email.", 503)
 
 
 @never_cache

@@ -21,25 +21,8 @@ from .models import (
     StockMovement,
     User,
 )
-from .permissions import DEFAULT_STATION_CAPABILITIES, STATION_CAPABILITIES
-
-PERMISSION_CHOICES = (
-    ("catalog.view", "View catalog"),
-    ("catalog.manage", "Manage catalog"),
-    ("orders.view", "View orders"),
-    ("orders.create", "Create orders"),
-    ("orders.manage", "Manage order status"),
-    ("inventory.view", "View inventory"),
-    ("inventory.manage", "Manage inventory"),
-    ("locations.view", "View locations"),
-    ("locations.manage", "Manage locations"),
-    ("tables.view", "View tables and QR codes"),
-    ("tables.manage", "Manage tables and QR codes"),
-    ("customers.view", "View customers"),
-    ("customers.manage", "Manage customers"),
-    ("reports.view", "View reports"),
-    ("employees.view", "View team"),
-    ("employees.manage", "Manage team"),
+from .permissions import (
+    DEFAULT_STATION_CAPABILITIES, INVITABLE_PERMISSIONS, PERMISSION_CHOICES, STATION_CAPABILITIES,
 )
 
 
@@ -58,6 +41,10 @@ class RegistrationForm(UserCreationForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["email"].widget.attrs.pop("autofocus", None)
+
+    def validate_unique(self):
+        # Registration handles the database constraint with the same public response for duplicates.
+        pass
 
 
 class BusinessForm(forms.ModelForm):
@@ -80,11 +67,17 @@ class BusinessForm(forms.ModelForm):
 
 class InvitationForm(forms.Form):
     email = forms.EmailField()
-    permissions = forms.MultipleChoiceField(choices=PERMISSION_CHOICES, required=False)
+    permissions = forms.MultipleChoiceField(
+        choices=[choice for choice in PERMISSION_CHOICES if choice[0] in INVITABLE_PERMISSIONS],
+        required=False, widget=forms.CheckboxSelectMultiple
+    )
 
 
 class StationForm(forms.ModelForm):
-    capabilities = forms.MultipleChoiceField(choices=STATION_CAPABILITIES, required=False)
+    capabilities = forms.MultipleChoiceField(
+        choices=STATION_CAPABILITIES, label="Station capabilities", required=False,
+        widget=forms.CheckboxSelectMultiple
+    )
 
     class Meta:
         model = Station
@@ -93,7 +86,9 @@ class StationForm(forms.ModelForm):
     def __init__(self, *args, business, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["location"].queryset = business.locations.filter(active=True)
-        self.fields["printer"].queryset = business.printers.filter(is_active=True)
+        self.fields["printer"].queryset = business.printers.filter(is_active=True).order_by("name")
+        self.fields["location"].empty_label = "No location assigned"
+        self.fields["printer"].empty_label = "No printer assigned"
         if not self.is_bound:
             self.fields["capabilities"].initial = DEFAULT_STATION_CAPABILITIES.get(
                 self.initial.get("kind", Station.Kind.REGISTER), []
@@ -122,18 +117,47 @@ class PrinterForm(forms.ModelForm):
 class PaymentConnectionForm(forms.Form):
     provider = forms.ChoiceField(choices=PaymentConnection.Provider.choices)
     environment = forms.ChoiceField(choices=PaymentConnection.Environment.choices)
-    merchant_id = forms.CharField(max_length=120)
-    credential_bundle = forms.CharField(
-        max_length=5000,
+    merchant_id = forms.CharField(label="Merchant ID", max_length=120)
+    server_key = forms.CharField(
+        label="Midtrans server key", required=False, max_length=5000,
         widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
-        help_text=(
-            'Paste provider-issued credentials as a JSON object, for example {"server_key":"…"}.'
-        ),
     )
+    signature_secret_key = forms.CharField(
+        label="Midtrans Signature Secret Key", required=False, max_length=5000,
+        help_text="From Midtrans Dashboard, Settings, Access Keys. Required for verification.",
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+    client_id = forms.CharField(label="BCA client ID", required=False, max_length=5000)
+    client_secret = forms.CharField(
+        label="BCA client secret", required=False, max_length=5000,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+    channel_id = forms.CharField(
+        label="BCA channel ID", required=False, max_length=120,
+        help_text="Leave blank to use the default channel.",
+    )
+    credential_bundle = forms.CharField(required=False, max_length=5000, widget=forms.PasswordInput)
+
+    def clean(self):
+        cleaned = super().clean()
+        provider = cleaned.get("provider")
+        if not provider or self.errors.get("credential_bundle") or cleaned.get("credential_bundle"):
+            return cleaned
+
+        required = ("server_key",) if provider == PaymentConnection.Provider.MIDTRANS else ("client_id", "client_secret")
+        for field in required:
+            if not cleaned.get(field) and not self.errors.get(field):
+                self.add_error(field, "Enter the credential issued by your payment provider.")
+        keys = (*required, "signature_secret_key") if provider == PaymentConnection.Provider.MIDTRANS else (*required, "channel_id")
+        cleaned["credential_bundle"] = {key: cleaned[key] for key in keys if cleaned.get(key)}
+        return cleaned
 
     def clean_credential_bundle(self):
+        bundle = self.cleaned_data["credential_bundle"]
+        if not bundle:
+            return None
         try:
-            credentials = json.loads(self.cleaned_data["credential_bundle"])
+            credentials = json.loads(bundle)
         except json.JSONDecodeError as error:
             raise forms.ValidationError("Enter credentials as a JSON object.") from error
         if (
@@ -263,10 +287,10 @@ class PromotionForm(forms.ModelForm):
             },
         }
         widgets = {
-            "start_date": forms.DateInput(attrs={"type": "date"}),
-            "end_date": forms.DateInput(attrs={"type": "date"}),
-            "start_time": forms.TimeInput(attrs={"type": "time"}),
-            "end_time": forms.TimeInput(attrs={"type": "time"}),
+            "start_date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
+            "end_date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
+            "start_time": forms.TimeInput(format="%H:%M:%S", attrs={"type": "time", "step": 1}),
+            "end_time": forms.TimeInput(format="%H:%M:%S", attrs={"type": "time", "step": 1}),
             "products": forms.SelectMultiple(attrs={"size": 6}),
             "categories": forms.SelectMultiple(attrs={"size": 4}),
             "locations": forms.SelectMultiple(attrs={"size": 4}),
@@ -294,10 +318,9 @@ class PromotionForm(forms.ModelForm):
         cleaned_data = super().clean()
         permanent = cleaned_data.get("permanent_offer", False)
         if permanent:
-            cleaned_data["start_date"] = None
-            cleaned_data["end_date"] = None
-            cleaned_data["starts_at"] = None
-            cleaned_data["ends_at"] = None
+            # Date inputs are disabled in this mode. Restore the stored values for later edits.
+            cleaned_data["start_date"] = self.instance.start_date
+            cleaned_data["end_date"] = self.instance.end_date
         else:
             start_date = cleaned_data.get("start_date")
             end_date = cleaned_data.get("end_date")
@@ -313,14 +336,7 @@ class PromotionForm(forms.ModelForm):
         promotion = super().save(commit=False)
         promotion.business = self.business
         promotion.days_of_week = self.cleaned_data.get("days_of_week") or []
-        if self.cleaned_data.get("permanent_offer"):
-            promotion.permanent_offer = True
-            promotion.start_date = None
-            promotion.end_date = None
-            promotion.starts_at = None
-            promotion.ends_at = None
-        else:
-            promotion.permanent_offer = False
+        promotion.permanent_offer = self.cleaned_data.get("permanent_offer", False)
         if commit:
             promotion.save()
             self.save_m2m()

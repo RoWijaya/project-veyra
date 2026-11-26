@@ -246,10 +246,11 @@ class CustomerCartTests(TestCase):
             "transaction_status": "settlement", "fraud_status": "accept",
             "transaction_id": "pickup-midtrans-test", "signature_key": signature,
         }
+        response.read.return_value = json.dumps({**notification, "payment_type": "qris"}).encode()
         webhook = "/api/payments/webhooks/midtrans/"
         for _ in range(2):
             self.assertEqual(self.client.post(webhook, notification, content_type="application/json").status_code, 200)
         paid = self.client.get(checkout.url)
         self.assertContains(paid, 'data-payment-status="Paid"')
         self.assertContains(paid, 'data-order-status="Preparing"')
-        provider_request.assert_called_once()
+        self.assertEqual([call.args[0].get_method() for call in provider_request.call_args_list], ["POST", "GET"])

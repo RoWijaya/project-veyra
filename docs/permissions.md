@@ -29,7 +29,7 @@ Pairing attempts and token rotation are rate limited by source IP. Keep pairing 
 
 `PaymentConnection` is unique per business and provider. Only the canonical owner can save, read through service code, update, verify, or remove credentials. Credential bundles use Fernet authenticated encryption and require a stable `PAYMENT_CREDENTIALS_ENCRYPTION_KEY`. Credentials never appear in audit metadata or connection pages.
 
-Provider adapters (Midtrans Core API and BCA SNAP QRIS MPM Dynamic) support dynamic QRIS generation, status polling, and webhook notification handling with cryptographic signature verification (Midtrans SHA-512, BCA SNAP HMAC-SHA512). Webhook events enforce replay protection via append-only request digests. Order release occurs upon provider-confirmed settlement (`after_paid`).
+The tenant adapters support dynamic QRIS and provider notification handling. Midtrans has status verification and reconciliation paths. A credential format check does not establish provider authorization. See [payments](PAYMENTS.md) for verification, expiry, supported refunds, and order release.
 
 ## Existing user permissions
 
@@ -37,6 +37,9 @@ Provider adapters (Midtrans Core API and BCA SNAP QRIS MPM Dynamic) support dyna
 | --- | --- | --- |
 | Open a business dashboard | Active membership or canonical ownership | Business-specific counts and shortcuts |
 | View or manage catalog | `catalog.view`, `catalog.manage` | Catalog, categories, and station routing are tenant scoped |
+| View ordering page builder | Active membership with `ordering_page.view` or `ordering_page.edit`, or canonical owner | Current draft, saved preview and private design images within one business |
+| Save a draft or preview unsaved changes | `ordering_page.edit` or canonical owner | Draft saves require QR ordering entitlement and a current revision |
+| Publish, unpublish, or restore a design | Canonical owner | Tenant-scoped, CSRF-protected actions with a current revision |
 | Create orders | `orders.create` and `catalog.view` | Server-priced tenant products; snapshots preserved |
 | View order history | `orders.view` | Orders are tenant scoped |
 | Change order status | `orders.manage` and `orders.view` | Server validates state transitions, writes audit events, triggers print routing |

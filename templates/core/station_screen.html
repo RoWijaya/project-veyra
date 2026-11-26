@@ -18,6 +18,7 @@
         {% if can_manage_orders %}<div class="ticket-actions">
           {% if order.status == 'new' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="preparing"><button class="button button-dark" type="submit">Start preparation</button></form>
           {% elif order.status == 'preparing' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="ready"><button class="button button-dark" type="submit">Mark ready</button></form>
+          {% elif order.status == 'ready' and order.payment_due %}<p class="field-hint">Waiting for payment before completion.</p>
           {% elif order.status == 'ready' %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="advance"><input type="hidden" name="order_id" value="{{ order.pk }}"><input type="hidden" name="status" value="completed"><button class="button button-dark" type="submit">Complete order</button></form>{% endif %}
           <form method="post">{% csrf_token %}<input type="hidden" name="action" value="reprint"><input type="hidden" name="order_id" value="{{ order.pk }}"><button class="button button-light" type="submit" aria-label="Reprint preparation ticket for order {{ order.pk|stringformat:'s'|slice:':6' }}">Reprint ticket</button></form>
         </div>{% endif %}

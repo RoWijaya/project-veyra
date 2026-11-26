@@ -1,30 +1,63 @@
 # Development
 
-## Structure and workflow
+Start with the [Windows quick start](../README.md#run-locally-on-windows) and [environment reference](ENVIRONMENT.md). Use Git, Docker Compose, and an installed Python 3.12 or newer.
 
-`config/` defines Django/ASGI settings; `core/models.py` owns persistence; `core/services.py` coordinates transactional business operations; `views.py` and `device_views.py` expose HTTP; `permissions.py` supplies access checks; `consumers.py`/`routing.py` handle Channels; `observability.py` supplies correlation, safe JSON and readiness. Templates and `core/static/core/` implement the server-rendered interface. No frontend framework migration is planned.
+## Repository map
 
-Use [DEVELOPMENT-AND-DEPLOYMENT.md](DEVELOPMENT-AND-DEPLOYMENT.md) for setup, [TESTING.md](TESTING.md) for verification and [PRD.md](PRD.md) plus [FEATURE-STATUS.md](FEATURE-STATUS.md) for scope. Preserve tenants and applied migrations. Add new migrations for schema changes. Reuse existing service/authorization/outbox patterns. Check every caller when changing shared behavior. New user workflows must connect HTTP, business logic, persistence and real interfaces.
+| Path | Purpose |
+| --- | --- |
+| [config/](../config/) | Settings, root URLs, ASGI and WSGI entrypoints |
+| [core/](../core/) | Business models, permissions, views, services and tests |
+| [core/payments/](../core/payments/) | Tenant Midtrans and BCA SNAP adapters |
+| [core/management/commands/](../core/management/commands/) | Workers, media backfill and the Channels probe |
+| [core/migrations/](../core/migrations/) | Schema and data migrations |
+| [templates/](../templates/) and [core/static/core/](../core/static/core/) | Server-rendered pages and browser behavior |
+| [pyproject.toml](../pyproject.toml) | Dependency ranges, development extra, pytest and Ruff settings |
+| [compose.yaml](../compose.yaml) and [Dockerfile](../Dockerfile) | Local database/cache and separate production app image |
 
-Scope queries to the authenticated tenant; validate object relationships, money and idempotency at trust boundaries. Use Decimal for money, transactions/row locks for coordinated writes and append-only records for operational history. Never trust browser-supplied prices or payment success. Keep credentials and token-bearing URLs out of source and logs.
+## Run in a POSIX shell
 
-## Common commands
-
-```powershell
-.venv\Scripts\python.exe manage.py check
-.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
-.venv\Scripts\python.exe manage.py test core --keepdb
-.venv\Scripts\python.exe -m ruff check --select I,E4,E7,E9 core
-.venv\Scripts\python.exe -m uvicorn config.asgi:application --reload --no-access-log
-.venv\Scripts\python.exe manage.py process_outbox
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+test -f .env || cp .env.example .env
+docker compose up -d postgres redis
+docker compose ps
 ```
 
-The focused Ruff selection checks imports and structural errors; it is not a full style-lint pass. Existing broader lint debt remains.
+Wait for both services to be healthy.
 
-## Recovery and Git
+```sh
+.venv/bin/python manage.py migrate
+.venv/bin/python -m uvicorn config.asgi:application --reload --no-access-log
+```
 
-The inspected repo has untracked project source and no HEAD commit. Do not stage secrets or invent a historical review baseline. A source recovery ZIP excluding `.env` was saved outside the repo before the 2026-11-17 edits; it is not a database backup. Establish a reviewed initial commit before using fixed-point diff reviews. Tracker configuration is absent; to publish specs/tickets, run `/setup-matt-pocock-skills` and configure the tracker. Implementation does not depend on tracker setup.
+Start ``.venv/bin/python manage.py process_outbox`` and ``.venv/bin/python manage.py process_account_mail`` in separate terminals. The account mail worker prints signup links when you use the local console backend. Both shell examples use the virtual environment directly. For runtime dependencies alone, the project also supports ``python -m pip install -r requirements.txt``.
 
-For each substantial change update applicable PRD, architecture, schema, integration, security, test and operations docs. Record actual verification, missing infrastructure and remaining gaps. Use decision records for significant choices; do not mark planned work as implemented.
+## Routine checks
 
-Identity code now lives in core/identity.py and identity_views.py; GoogleIdentity and Authenticator were added by migration 0019. New identity tests are in core/test_identity.py and use provider HTTP mocks with signed tokens, plus real PostgreSQL/Redis stream checks. Required owner/admin enrollment defaults on in production and can be enabled locally via MFA_REQUIRE_PRIVILEGED.
+```powershell
+.\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py migrate --plan
+.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+.\.venv\Scripts\python.exe manage.py test core.test_ordering_builder --noinput
+.\.venv\Scripts\python.exe manage.py test --noinput
+.\.venv\Scripts\python.exe manage.py check_realtime
+```
+
+Run ``manage.py makemigrations core`` when intentionally creating a schema change. Inspect the migration and test forward application before applying it to existing data. Preserve committed history. Use ``manage.py createsuperuser`` for optional local Django admin access. Production administrators must satisfy the configured MFA policy.
+
+Use business-scoped lookups and the existing permissions and service layers. Verify new write behavior through HTTP or ASGI and add focused transactional coverage for concurrency and idempotency. See [testing](TESTING.md).
+
+## Diagnose local startup
+
+| Symptom | Check |
+| --- | --- |
+| PostgreSQL connection error | Check ``docker compose ps``, ``docker compose exec -T postgres pg_isready -U veyra -d veyra``, the database URL, and port availability. |
+| Live state stays stale | Check ``/readyz/``, ``docker compose exec -T redis redis-cli ping``, the outbox worker, and the browser WebSocket. Run ``manage.py check_realtime`` to verify Channels fan-out. |
+| No account email | Check the local server terminal. A configured Resend key overrides console mail. |
+| Missing static assets | Start the actual ASGI entrypoint in debug or verify the container collected static assets. Check permissions separately for uploaded media. |
+| Test database creation fails | Use a local PostgreSQL role allowed to create a separate test database. Check the connection target before rerunning. |
+| Payment method or feature is unavailable | Check the business plan, location settings, connection eligibility, and supported payment entry point. |
+
+[Deployment](DEPLOYMENT.md) · [Operations](OPERATIONS.md)

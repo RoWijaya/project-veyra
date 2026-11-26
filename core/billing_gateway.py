@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
@@ -12,6 +10,8 @@ from django.utils import timezone
 
 from .billing import apply_paid_invoice, billing_event, lock_subscription
 from .models import BillingAttempt, BillingInvoice, BusinessSubscription
+from .observability import logger
+from .payments.midtrans import valid_notification_signature
 
 SNAP_LIFETIME_HOURS = 24
 SNAP_LIFETIME = timedelta(hours=SNAP_LIFETIME_HOURS)
@@ -114,13 +114,11 @@ def request_hosted_url(attempt, return_url):
 def notification_attempt(payload):
     if not gateway_available() or not isinstance(payload, dict):
         raise PermissionError
-    fields = [payload.get(key) for key in ("order_id", "status_code", "gross_amount", "signature_key")]
-    if any(not isinstance(value, str) or not value.isascii() or len(value) > 160 for value in fields):
+    secret = settings.VEYRA_BILLING_MIDTRANS_SIGNATURE_SECRET_KEY or settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY
+    if not valid_notification_signature(payload, secret):
+        logger.warning("Rejected platform payment signature", extra={"event": "billing.signature_rejected"})
         raise PermissionError
-    reference, status_code, amount, signature = fields
-    expected = hashlib.sha512((reference + status_code + amount + settings.VEYRA_BILLING_MIDTRANS_SERVER_KEY).encode()).hexdigest()
-    if not hmac.compare_digest(expected, signature):
-        raise PermissionError
+    reference = payload["order_id"]
     if not reference.startswith("VB-") or len(reference) != 35:
         raise ValueError("Unknown invoice payment.")
     return UUID(hex=reference[3:])

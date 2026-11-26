@@ -1,20 +1,27 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
 
-from . import customer_views, device_views, identity_views, media_views, modifier_views, views, voucher_views
-from .receipt_views import order_history, order_receipt
+from . import customer_views, device_views, identity_views, media_views, modifier_views, ordering_views, views, voucher_views
+from .receipt_views import order_history, order_receipt, order_refunds
 from .observability import readiness
 
 from . import billing_views, catalog_views, purchasing_views
 
 urlpatterns = [
-    path("app/<slug:slug>/settings/ordering-page/", media_views.ordering_page_settings, name="ordering_page_settings"),
-    path("app/<slug:slug>/settings/ordering-page/banner/", media_views.ordering_banner_image, name="ordering_banner_image"),
+    path("app/<slug:slug>/settings/ordering-page/", ordering_views.ordering_page_settings, name="ordering_page_settings"),
+    path("app/<slug:slug>/settings/ordering-page/preview/", ordering_views.ordering_page_preview, name="ordering_page_preview"),
+    path("app/<slug:slug>/settings/ordering-page/preview/products/<uuid:product_id>/", ordering_views.ordering_preview_product_image, name="ordering_preview_product_image"),
+    path("app/<slug:slug>/settings/ordering-page/banner/", ordering_views.ordering_editor_image, {"kind": "banner"}, name="ordering_banner_image"),
     path("order/table/<str:token>/ordering-banner/", media_views.guest_ordering_banner, name="guest_ordering_banner"),
+    path("app/<slug:slug>/settings/ordering-page/logo/", ordering_views.ordering_editor_image, {"kind": "logo"}, name="ordering_logo_image"),
+    path("order/table/<str:token>/ordering-logo/", media_views.guest_ordering_logo, name="guest_ordering_logo"),
     path("app/<slug:slug>/settings/billing/", billing_views.subscription_billing, name="subscription_billing"),
     path("app/<slug:slug>/settings/billing/invoices/<uuid:invoice_id>/", billing_views.billing_invoice, name="billing_invoice"),
     path("api/billing/notifications/midtrans/", billing_views.billing_notification, name="billing_notification"),
     path("app/<slug:slug>/team/<int:membership_id>/inventory-access/", purchasing_views.inventory_access, name="inventory_access"),
+    path("app/<slug:slug>/inventory/balances/<int:balance_id>/count/", purchasing_views.stock_count, name="stock_count"),
+    path("app/<slug:slug>/inventory/purchases/<uuid:purchase_id>/lines/<int:line_id>/return/",
+         purchasing_views.supplier_return, name="supplier_return"),
     path("app/<slug:slug>/inventory/purchases/", purchasing_views.purchase_orders, name="purchases"),
     path("app/<slug:slug>/inventory/purchases/new/", purchasing_views.purchase_editor, name="purchase_create"),
     path("app/<slug:slug>/inventory/purchases/<uuid:purchase_id>/", purchasing_views.purchase_detail, name="purchase_detail"),
@@ -91,6 +98,7 @@ urlpatterns = [
         name="promotion_edit",
     ),
     path("app/<slug:slug>/orders/", order_history, name="order_history"),
+    path("app/<slug:slug>/orders/<uuid:order_id>/refunds/", order_refunds, name="order_refunds"),
     path("app/<slug:slug>/orders/<uuid:order_id>/receipt/", order_receipt, name="order_receipt"),
     path("app/<slug:slug>/pos/", views.point_of_sale, name="point_of_sale"),
     path(
@@ -173,6 +181,8 @@ urlpatterns = [
     path("order/pickup/<str:token>/", customer_views.menu, {"pickup": True}, name="pickup_menu"),
     path("order/pickup/<str:token>/cart/", customer_views.your_order, {"pickup": True}, name="pickup_cart"),
     path("order/table/<str:token>/menu.json", views.table_menu_data, name="table_menu_data"),
+    path("order/table/<str:token>/theme/<slug:version>.css",
+         customer_views.guest_ordering_theme, name="guest_ordering_theme"),
     path("order/<uuid:order_id>/status/", views.guest_order_tracking, name="guest_order_tracking"),
     path("order/<uuid:order_id>/payment.svg", views.guest_order_payment_qr, name="guest_order_payment_qr"),
     path(

@@ -8,13 +8,15 @@ from .services import _queue_order_event, format_receipt
 
 @transaction.atomic
 def queue_receipt(*, business, order_id, actor, station_id, idempotency_key, action):
-    membership = Membership.objects.get(business=business, user=actor, active=True)
+    membership = Membership.objects.select_for_update(of=("self",)).get(
+        business=business, user=actor, user__is_active=True, active=True,
+    )
     if not membership.allows("orders.view") or not membership.allows("orders.manage"):
         raise PermissionError("You cannot dispatch receipts for this business.")
     if action not in {"print", "reprint", "retry"}:
         raise ValueError("Choose print, reprint, or retry.")
     key = uuid.UUID(str(idempotency_key))
-    order = Order.objects.select_for_update().get(business=business, pk=order_id)
+    order = membership.scope_locations(business.orders.select_for_update()).get(pk=order_id)
     if order.payment_status != Order.PaymentStatus.PAID:
         raise ValueError("Payment must be recorded before printing a receipt.")
     station_id = uuid.UUID(str(station_id))

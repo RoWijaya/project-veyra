@@ -1,33 +1,167 @@
 {% extends "core/base.html" %}
+{% load static %}
 {% block title %}Ordering page · {{ business.name }} — Veyra{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'core/ordering-builder.css' %}">{% endblock %}
 {% block content %}
-<section class="app-page">
+<section class="app-page ordering-builder" data-ordering-builder>
   <div class="crumb"><a href="{% url 'business_settings' business.slug %}">Settings</a><span>/</span>Ordering page</div>
-  <div class="app-heading"><div><h1>Ordering page</h1><p>Customize the menu guests open from a table QR or takeaway link.</p></div>
-    {% if preview_url %}<a class="button button-light" href="{{ preview_url }}" target="_blank" rel="noopener">Preview guest menu <span aria-hidden="true">↗</span><span class="sr-only"> (opens a new tab)</span></a>{% endif %}
+  <div class="app-heading">
+    <div><h1>Ordering page</h1><p>Customize the menu guests open from a table QR or takeaway link.</p></div>
   </div>
-  {% if not preview_url %}<p class="field-hint">Add a <a class="quiet-link" href="{% url 'tables' business.slug %}">table QR</a> or enable takeaway at a <a class="quiet-link" href="{% url 'locations' business.slug %}">location</a> to preview the guest menu.</p>{% endif %}
-  <section class="form-card ordering-page-form">
-    <form method="post" enctype="multipart/form-data" class="form-stack" data-media-form>
-      {% csrf_token %}
-      {% if form.non_field_errors %}<div class="form-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
-      {% include "core/purchasing_field.html" with field=form.display_name %}
-      {% include "core/purchasing_field.html" with field=form.introduction %}
-      <fieldset class="catalog-media">
-        <legend>Menu banner</legend>
-        <p class="field-hint">JPEG, PNG or WebP up to 5 MB. Use a wide photo and keep important details near the center.</p>
-        {% if ordering_page.has_banner %}<figure data-current-image>
-          <img class="media-preview ordering-banner-preview" src="{% url 'ordering_banner_image' business.slug %}" alt="{{ ordering_page.banner_alt }}" width="768" height="256" data-media-image>
-          <figcaption class="field-hint">Current banner</figcaption>
-        </figure>{% endif %}
-        <img class="media-preview ordering-banner-preview" data-upload-preview alt="Selected banner preview" width="768" height="256" hidden>
-        {% include "core/purchasing_field.html" with field=form.image %}
-        {% include "core/purchasing_field.html" with field=form.banner_alt %}
-        {% if form.remove_image %}{% include "core/purchasing_field.html" with field=form.remove_image %}{% endif %}
-      </fieldset>
-      <div class="management-actions"><button class="button button-dark">Save ordering page</button><a class="button button-light" href="{% url 'business_settings' business.slug %}">Cancel</a></div>
-    </form>
-  </section>
-  <p class="ordering-campaign-link"><a class="quiet-link" href="{% url 'banners' business.slug %}">Manage campaign banners</a></p>
+  <div class="builder-toolbar">
+    <div class="builder-status">
+      {% if page.is_published %}<span class="status-badge builder-published">Published</span>{% elif page %}<span class="status-badge">Unpublished</span>{% else %}<span class="status-badge">No published design</span>{% endif %}
+      {% if draft.pk %}<span class="status-badge">Draft</span>{% endif %}
+      <span data-builder-dirty role="status"{% if not form.is_bound %} hidden{% endif %}>Unsaved changes</span>
+    </div>
+    <div class="builder-actions">
+      <a class="button button-light builder-preview-jump" href="#builder-preview-title">Live preview</a>
+      {% if public_menu_url %}<a class="button button-light" href="{{ public_menu_url }}" target="_blank" rel="noopener">View public page<span class="sr-only"> (opens a new tab)</span></a>{% endif %}
+      {% if can_edit %}<button class="button {% if draft.pk and is_owner %}button-light{% else %}button-dark{% endif %}" form="ordering-builder-form" name="action" value="save"{% if conflict %} disabled{% endif %}>Save draft</button>{% endif %}
+      {% if is_owner and draft.pk and not conflict and not form.is_bound %}<a class="button button-dark" href="#publish-ordering" data-builder-confirm="publish-ordering">Publish</a>{% endif %}
+    </div>
+  </div>
+  {% if conflict %}<p class="form-error" role="alert">This draft changed in another tab. <a href="{% url 'ordering_page_settings' business.slug %}">Reload the latest draft</a> before saving.</p>{% endif %}
+  {% if action_error %}<p class="form-error" role="alert">{{ action_error }}</p>{% endif %}
+  {% if not page.is_published %}<p class="field-hint builder-note">Guests see the standard menu until you publish a design.</p>{% endif %}
+  {% if not public_menu_url %}<p class="field-hint builder-note">A public link appears after you set up a table QR or enable takeaway. You can preview the design now.</p>{% endif %}
+  <div class="builder-workspace">
+    <section class="form-card builder-editor" aria-labelledby="builder-editor-title">
+      <h2 id="builder-editor-title" tabindex="-1">Customize your menu</h2>
+      {% if not can_edit %}<p class="field-hint">You have read-only access. Preview the saved design here.</p>{% endif %}
+      <form method="post" action="{% url 'ordering_page_settings' business.slug %}" enctype="multipart/form-data" id="ordering-builder-form" data-media-form>
+        {% csrf_token %}{{ form.revision }}
+        {% for field in form.hidden_fields %}{% if field.name != "revision" %}{{ field }}{% endif %}{% endfor %}
+        <input type="hidden" name="presentation_fields" value="1">
+        <input type="hidden" name="preview_request" value="">
+        {% if form.errors %}<div class="form-error" role="alert" tabindex="-1"><strong>Check the highlighted settings.</strong>{{ form.non_field_errors }}{% for field in form.hidden_fields %}{{ field.errors }}{% endfor %}</div>{% endif %}
+        <fieldset class="builder-fields"{% if not can_edit %} disabled{% endif %}>
+          <legend class="sr-only">Menu settings</legend>
+          <details class="form-disclosure builder-section" open>
+            <summary>Branding</summary>
+            <div class="builder-section-body">
+              {% include "core/purchasing_field.html" with field=form.display_name %}
+              {% include "core/purchasing_field.html" with field=form.tagline %}
+              {% include "core/purchasing_field.html" with field=form.introduction %}
+              {% include "core/ordering_builder_upload.html" with kind="logo" upload=form.logo removal=form.remove_logo content=draft.logo_content %}
+            </div>
+          </details>
+          <details class="form-disclosure builder-section"{% if form.errors %} open{% endif %}>
+            <summary>Cover &amp; banner</summary>
+            <div class="builder-section-body">
+              {% include "core/ordering_builder_upload.html" with kind="banner" upload=form.image removal=form.remove_image content=draft.banner_content %}
+              {% include "core/purchasing_field.html" with field=form.banner_alt %}
+              <div class="builder-pair">{% include "core/purchasing_field.html" with field=form.focal_x %}{% include "core/purchasing_field.html" with field=form.focal_y %}</div>
+              {% include "core/purchasing_field.html" with field=form.banner_title %}
+              {% include "core/purchasing_field.html" with field=form.banner_description %}
+              {% include "core/purchasing_field.html" with field=form.caption %}
+            </div>
+          </details>
+          <details class="form-disclosure builder-section"{% if form.errors %} open{% endif %}>
+            <summary>Appearance</summary>
+            <div class="builder-section-body">
+              {{ color_presets|json_script:"ordering-color-presets" }}
+              <label class="field" data-preset-control hidden><span>Color preset</span><select data-color-preset><option value="">Custom colors</option>{% for label in color_presets %}<option>{{ label }}</option>{% endfor %}</select></label>
+              <div class="builder-pair builder-colors">{% for field in color_fields %}{% include "core/purchasing_field.html" with color_value=field.value %}{% endfor %}</div>
+              <p class="field-hint">Text and accents need 4.5:1 contrast against the page background.</p>
+              <div class="builder-pair">{% include "core/purchasing_field.html" with field=form.button_style %}{% include "core/purchasing_field.html" with field=form.card_style %}</div>
+            </div>
+          </details>
+          <details class="form-disclosure builder-section"{% if form.errors %} open{% endif %}>
+            <summary>Layout</summary>
+            <div class="builder-section-body">
+              <fieldset class="builder-layouts"><legend class="sr-only">Layout preset</legend>
+                {% for value, label, description in layouts %}
+                <label class="builder-layout">
+                  <input type="radio" name="layout" value="{{ value }}"{% if form.layout.value == value %} checked{% endif %}>
+                  <span><strong>{{ label }}</strong><small>{{ description }}</small></span>
+                </label>
+                {% endfor %}{{ form.layout.errors }}
+              </fieldset>
+            </div>
+          </details>
+          <details class="form-disclosure builder-section"{% if form.errors %} open{% endif %}>
+            <summary>Menu presentation</summary>
+            <div class="builder-section-body">
+              <p class="field-hint">Choose what guests see and in what order. Hidden items stay in your catalog.</p>
+              {% include "core/ordering_builder_catalog.html" with title="Categories" kind="category" rows=category_rows %}
+              {% include "core/ordering_builder_catalog.html" with title="Products" kind="product" rows=product_rows %}
+              {% include "core/purchasing_field.html" with field=form.show_images %}
+              {% include "core/purchasing_field.html" with field=form.show_descriptions %}
+            </div>
+          </details>
+          <details class="form-disclosure builder-section"{% if form.errors %} open{% endif %}>
+            <summary>Restaurant information</summary>
+            <div class="builder-section-body">
+              {% include "core/purchasing_field.html" with field=form.show_information %}
+              {% include "core/purchasing_field.html" with field=form.address %}
+              {% include "core/purchasing_field.html" with field=form.phone %}
+              {% include "core/purchasing_field.html" with field=form.website %}
+              {% include "core/purchasing_field.html" with field=form.instagram %}
+              {% include "core/purchasing_field.html" with field=form.facebook %}
+              {% include "core/purchasing_field.html" with field=form.opening_note %}
+            </div>
+          </details>
+        </fieldset>
+      </form>
+    </section>
+    <section class="builder-preview" aria-labelledby="builder-preview-title">
+      <div class="builder-preview-heading"><h2 id="builder-preview-title" tabindex="-1">Live preview</h2><span class="status-badge">Private</span></div>
+      <a class="quiet-link builder-preview-jump" href="#builder-editor-title">Back to editor</a>
+      <div class="builder-devices" role="group" aria-label="Preview device">
+        <button class="button button-light" type="button" data-preview-width="1120" aria-pressed="true">Desktop</button>
+        <button class="button button-light" type="button" data-preview-width="768" aria-pressed="false">Tablet</button>
+        <button class="button button-light" type="button" data-preview-width="390" aria-pressed="false">Mobile</button>
+      </div>
+      {% if locations %}
+      <div class="field builder-branch">
+        <label for="id_preview_location">Preview location</label>
+        <select id="id_preview_location" name="preview_location" form="ordering-builder-form" data-preview-location>
+          {% for location in locations %}<option value="{{ location.pk }}">{{ location.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <p class="field-hint" role="status" data-preview-status>Loading the saved design…</p>
+      <div class="builder-preview-viewport" data-builder-viewport>
+        <iframe title="Private guest menu preview" name="ordering-preview" data-builder-preview
+                src="{% url 'ordering_page_preview' business.slug %}"></iframe>
+      </div>
+      {% if can_edit %}<button class="button button-light builder-refresh" form="ordering-builder-form" data-preview-submit formtarget="ordering-preview" formaction="{% url 'ordering_page_preview' business.slug %}" formnovalidate>Preview guest menu</button>{% endif %}
+    </section>
+  </div>
+  {% if is_owner and not conflict %}
+    {% if draft.pk and not form.is_bound %}
+    <section class="builder-confirm" id="publish-ordering" data-confirm-panel aria-labelledby="publish-heading">
+      <h2 id="publish-heading">Publish this draft?</h2>
+      <p>Guests will see the saved design on all existing table QR and takeaway links.</p>
+      <form method="post" action="{% url 'ordering_page_settings' business.slug %}" class="builder-actions">{% csrf_token %}<input type="hidden" name="revision" value="{{ page.revision }}">
+        <a class="button button-light" href="#builder-editor-title" data-confirm-cancel>Cancel</a>
+        <button class="button button-dark" name="action" value="publish">Publish draft</button>
+      </form>
+    </section>
+    {% endif %}
+    {% if page.is_published %}
+    <details class="form-disclosure builder-history"><summary>Unpublish design</summary>
+      <p class="field-hint">Existing links stay active and show the standard menu.</p>
+      <form method="post" action="{% url 'ordering_page_settings' business.slug %}">{% csrf_token %}<input type="hidden" name="revision" value="{{ page.revision }}">
+        <button class="button button-light button-danger" name="action" value="unpublish">Unpublish design</button>
+      </form>
+    </details>
+    {% endif %}
+  {% endif %}
+  <details class="form-disclosure builder-history">
+    <summary>Publication history</summary>
+    {% if history %}
+    <ul>{% for version in history %}<li>
+      <div><strong>{% if version.number == 0 %}Original design{% else %}Version {{ version.number }}{% endif %}</strong><small>{{ version.saved_at|date:"j M Y, H:i" }}{% if page.is_published and page.published_number == version.number %} · Live{% endif %}</small></div>
+      {% if is_owner and not conflict %}<form method="post" action="{% url 'ordering_page_settings' business.slug %}" data-confirm="Restore this version as the draft? It will replace any saved draft. The public menu will stay as it is.">
+        {% csrf_token %}<input type="hidden" name="revision" value="{{ page.revision }}"><input type="hidden" name="version" value="{{ version.number }}">
+        <button class="button button-light" name="action" value="restore">Restore as draft</button>
+      </form>{% endif %}
+    </li>{% endfor %}</ul>
+    {% else %}<p class="inline-empty">Published versions will appear here.</p>{% endif %}
+  </details>
+  {% if is_owner %}<p class="ordering-campaign-link"><a class="quiet-link" href="{% url 'banners' business.slug %}">Manage campaign banners</a></p>{% endif %}
 </section>
+<script src="{% static 'core/ordering-builder.js' %}" defer></script>
 {% endblock %}
